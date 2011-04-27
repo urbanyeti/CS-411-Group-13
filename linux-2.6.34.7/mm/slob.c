@@ -261,13 +261,80 @@ static void slob_free_pages(void *b, int order)
 		current->reclaim_state->reclaimed_slab += 1 << order;
 	free_pages((unsigned long)b, order);
 }
+/*
+* fix_not_best - Unallocates a block that was the best from a page, but not the overall best
+* @block: the slob block to unallocate
+* @size:  the size of the current block attempting to be allocated
+*
+* Mostly copied from slob_free below.  Removed the lock and used the size from the block to 
+* keep internal fragmentation to a minimum.
+*/
+static void fix_not_best(slob_t *block, size_t size)
+{
+	struct slob_page *sp;
+	slob_t *prev, *next, *b = block;
+	slobidx_t units;
+
+	if (unlikely(ZERO_OR_NULL_PTR(block)))
+		return;
+	BUG_ON(!size);
+
+	sp = slob_page(block); //not sure if this will work...
+	units = SLOB_UNITS(size);
+
+	if (!slob_page_free(sp)) {
+		/* This slob page is about to become partially free. Easy! */
+		sp->units = units;
+		sp->free = b;
+		set_slob(b, units,
+			(void *)((unsigned long)(b +
+					SLOB_UNITS(PAGE_SIZE)) & PAGE_MASK));
+		set_slob_page_free(sp, &free_slob_small);
+		goto out;
+	}
+
+	/*
+	 * Otherwise the page is already partially free, so find reinsertion
+	 * point.
+	 */
+	sp->units += units;
+
+	if (b < sp->free) {
+		if (b + units == sp->free) {
+			sp->free = slob_next(sp->free);
+		}
+		set_slob(b, slob_units(b), sp->free);
+		sp->free = b;
+	} else {
+		prev = sp->free;
+		next = slob_next(prev);
+		while (b > next) {
+			prev = next;
+			next = slob_next(prev);
+		}
+
+		if (!slob_last(prev) && b + units == next) {
+			set_slob(b, slob_units(b), slob_next(next));
+		} else
+			set_slob(b, units, next);
+
+		if (prev + slob_units(prev) == b) {
+			units = slob_units(b) + slob_units(prev);
+			set_slob(prev, units, slob_next(b));
+		} else
+			set_slob(prev, slob_units(prev), b);
+	}
+out:
+	return;
+}
+
 
 /*
- * Allocate a slob block within a given slob_page sp.
+ * Allocate the best fit slob block within a given slob_page sp.
  */
 static void *slob_page_alloc(struct slob_page *sp, size_t size, int align)
 {
-	slob_t *prev, *cur, *aligned = NULL;
+	slob_t *prev, *cur, *best = *bests_prev = *aligned = NULL;
 	int delta = 0, units = SLOB_UNITS(size);
 
 	for (prev = NULL, cur = sp->free; ; prev = cur, cur = slob_next(cur)) {
@@ -277,7 +344,8 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align)
 			aligned = (slob_t *)ALIGN((unsigned long)cur, align);
 			delta = aligned - cur;
 		}
-		if (avail >= units + delta) { /* room enough? */
+		
+		if (avail >= units + delta && (!best || avail - delta < slob_units(best)) ) { /* room enough? AND better than best*/
 			slob_t *next;
 
 			if (delta) { /* need to fragment head to align? */
@@ -291,25 +359,50 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align)
 
 			next = slob_next(cur);
 			if (avail == units) { /* exact fit? unlink. */
-				if (prev)
+				if (best && !bests_prev) {
+					sp->free = best;	
+				}else if (best && bests_prev) {
+					if (bests_prev + slob_units(bests_prev) == best)
+						set_slob(bests_prev, slob_units(bests_prev) + slob_units(best), slob_next(best));
+					else
+						set_slob(bests_prev, slob_units(bests_prev), best);
+				}
+				
+				if (prev) {
 					set_slob(prev, slob_units(prev), next);
+					bests_prev = prev;
+				}
 				else
 					sp->free = next;
+				best = cur;
 			} else { /* fragment */
-				if (prev)
+				if (best && !bests_prev) {
+					sp->free = best;	
+				}else if (best && bests_prev) {
+					if (bests_prev + slob_units(bests_prev) == best)
+						set_slob(bests_prev, slob_units(bests_prev) + slob_units(best), slob_next(best));
+					else
+						set_slob(bests_prev, slob_units(bests_prev), best);
+				}
+
+				if (prev) {
 					set_slob(prev, slob_units(prev), cur + units);
-				else
+					bests_prev = prev;
+				}else 
 					sp->free = cur + units;
 				set_slob(cur + units, avail - units, next);
+				best = cur;
 			}
 
+		}
+		
+		if (slob_last(cur)) {
 			sp->units -= units;
 			if (!sp->units)
 				clear_slob_page_free(sp);
-			return cur;
+			return best;
+
 		}
-		if (slob_last(cur))
-			return NULL;
 	}
 }
 
