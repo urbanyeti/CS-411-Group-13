@@ -1,4 +1,19 @@
 /*
+* CS 411, Group 13
+* James Admire, Dwight Trahin, Daniel Urbanski, Lewis Valentine
+*
+* Summary of changes:
+* Added a function fix_not_best that puts a block back into
+* its slob page
+*
+* Added some conditionals and messed with the control in
+* slob_page_alloc so that the block allocated should be the
+* best fit block on the page.
+*
+* (add your own changes here)
+*/
+
+/*
  * SLOB Allocator: Simple List Of Blocks
  *
  * Matt Mackall <mpm@selenic.com> 12/30/03
