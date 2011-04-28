@@ -278,23 +278,22 @@ static void slob_free_pages(void *b, int order)
 }
 /*
 * fix_not_best - Unallocates a block that was the best from a page, but not the overall best
-* @block: the slob block to unallocate
+* @block: the pointer to a block to unallocate
 * @size:  the size of the current block attempting to be allocated
 *
-* Mostly copied from slob_free below.  Removed the lock and used the size from the block to 
-* keep internal fragmentation to a minimum.
+* Mostly copied from slob_free below.  Removed the lock and got rid of the case where size = PAGE_SIZE.
 */
-static void fix_not_best(slob_t *block, size_t size)
+static void fix_not_best(void *block, size_t size)
 {
 	struct slob_page *sp;
-	slob_t *prev, *next, *b = block;
+	slob_t *prev, *next, *b = (slob_t *)block;
 	slobidx_t units;
 
 	if (unlikely(ZERO_OR_NULL_PTR(block)))
 		return;
 	BUG_ON(!size);
 
-	sp = slob_page(block); //not sure if this will work...
+	sp = slob_page(block);
 	units = SLOB_UNITS(size);
 
 	if (!slob_page_free(sp)) {
@@ -316,9 +315,10 @@ static void fix_not_best(slob_t *block, size_t size)
 
 	if (b < sp->free) {
 		if (b + units == sp->free) {
+			units += slob_units(sp->free);
 			sp->free = slob_next(sp->free);
 		}
-		set_slob(b, slob_units(b), sp->free);
+		set_slob(b, units, sp->free);
 		sp->free = b;
 	} else {
 		prev = sp->free;
@@ -329,7 +329,8 @@ static void fix_not_best(slob_t *block, size_t size)
 		}
 
 		if (!slob_last(prev) && b + units == next) {
-			set_slob(b, slob_units(b), slob_next(next));
+			units += slob_units(next);
+			set_slob(b, units, slob_next(next));
 		} else
 			set_slob(b, units, next);
 
@@ -359,7 +360,7 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align)
 			aligned = (slob_t *)ALIGN((unsigned long)cur, align);
 			delta = aligned - cur;
 		}
-		
+
 		if (avail >= units + delta && (!best || avail - delta < slob_units(best)) ) { /* room enough? AND better than best*/
 			slob_t *next;
 
@@ -375,14 +376,20 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align)
 			next = slob_next(cur);
 			if (avail == units) { /* exact fit? unlink. */
 				if (best && !bests_prev) {
-					sp->free = best;	
+				    set_slob(best, units + slob_units(sp->free), slob_next(sp->free));
+					sp->free = best;
 				}else if (best && bests_prev) {
+					if (best + units == slob_next(bests_prev))
+                        set_slob(best, units + slob_units(slob_next(bests_prev)), slob_next(slob_next(bests_prev)));
+					else
+                        set_slob(best, units, slob_next(bests_prev));
+
 					if (bests_prev + slob_units(bests_prev) == best)
 						set_slob(bests_prev, slob_units(bests_prev) + slob_units(best), slob_next(best));
 					else
 						set_slob(bests_prev, slob_units(bests_prev), best);
 				}
-				
+
 				if (prev) {
 					set_slob(prev, slob_units(prev), next);
 					bests_prev = prev;
@@ -392,8 +399,14 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align)
 				best = cur;
 			} else { /* fragment */
 				if (best && !bests_prev) {
-					sp->free = best;	
+				    set_slob(best, units + slob_units(sp->free), slob_next(sp->free));
+					sp->free = best;
 				}else if (best && bests_prev) {
+				    if (best + units == slob_next(bests_prev))
+                        set_slob(best, units + slob_units(slob_next(bests_prev)), slob_next(slob_next(bests_prev)));
+                    else
+                        set_slob(best, units, slob_next(bests_prev));
+
 					if (bests_prev + slob_units(bests_prev) == best)
 						set_slob(bests_prev, slob_units(bests_prev) + slob_units(best), slob_next(best));
 					else
@@ -403,14 +416,14 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align)
 				if (prev) {
 					set_slob(prev, slob_units(prev), cur + units);
 					bests_prev = prev;
-				}else 
+				}else
 					sp->free = cur + units;
 				set_slob(cur + units, avail - units, next);
 				best = cur;
 			}
 
 		}
-		
+
 		if (slob_last(cur)) {
 			sp->units -= units;
 			if (!sp->units)
