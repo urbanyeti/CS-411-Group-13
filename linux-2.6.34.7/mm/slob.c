@@ -84,6 +84,11 @@ typedef s16 slobidx_t;
 typedef s32 slobidx_t;
 #endif
 
+/*Globals for sys calls*/
+static unsigned int pageClaim;
+static unsigned int assignmentClaim;
+
+
 struct slob_block {
 	slobidx_t units;
 };
@@ -348,6 +353,7 @@ static void *slob_alloc(size_t size, gfp_t gfp, int align, int node)
 
 		/* Attempt to alloc */
 		prev = sp->list.prev;
+		assignmentClaim = assignmentClaim + size; //allocated some memory
 		b = slob_page_alloc(sp, size, align);
 		if (!b)
 			continue;
@@ -364,6 +370,7 @@ static void *slob_alloc(size_t size, gfp_t gfp, int align, int node)
 
 	/* Not enough space: must allocate a new page */
 	if (!b) {
+		pageClaim = pageClaim + PAGE_SIZE; //page allocated
 		b = slob_new_pages(gfp & ~__GFP_ZERO, 0, node);
 		if (!b)
 			return NULL;
@@ -398,9 +405,9 @@ static void slob_free(void *block, int size)
 	if (unlikely(ZERO_OR_NULL_PTR(block)))
 		return;
 	BUG_ON(!size);
-
 	sp = slob_page(block);
 	units = SLOB_UNITS(size);
+	assignmentClaim = assignmentClaim - size; //assigned memory freed
 
 	spin_lock_irqsave(&slob_lock, flags);
 
@@ -412,6 +419,7 @@ static void slob_free(void *block, int size)
 		clear_slob_page(sp);
 		free_slob_page(sp);
 		slob_free_pages(b, 0);
+		pageClaim = pageClaim - PAGE_SIZE; //assigned page freed
 		return;
 	}
 
@@ -697,3 +705,13 @@ void __init kmem_cache_init_late(void)
 {
 	/* Nothing to do */
 }
+
+unsigned int sys_get_slob_amt_free(void)
+{
+	return pageClaim - assignmentClaim; //return the size of the pages minus the amount we've given away, the amount free
+}
+unsigned int sys_get_slob_amt_claimed(void)
+{
+	return pageClaim; //Return the size of the allocated pages.
+}
+
