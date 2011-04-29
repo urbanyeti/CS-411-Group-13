@@ -68,6 +68,7 @@
 #include <linux/list.h>
 #include <linux/kmemtrace.h>
 #include <linux/kmemleak.h>
+#include <linux/linkage.h>
 #include <asm/atomic.h>
 
 /*
@@ -706,11 +707,11 @@ void __init kmem_cache_init_late(void)
 	/* Nothing to do */
 }
 
-unsigned int sys_get_slob_amt_free(void)
+asmlinkage unsigned int sys_get_slob_amt_free(void)
 {
 	return pageClaim - assignmentClaim; //return the size of the pages minus the amount we've given away, the amount free
 }
-unsigned int sys_get_slob_amt_claimed(void)
+asmlinkage unsigned int sys_get_slob_amt_claimed(void)
 {
 	return pageClaim; //Return the size of the allocated pages.
 }
