@@ -350,8 +350,9 @@ out:
  */
 static void *slob_page_alloc(struct slob_page *sp, size_t size, int align)
 {
-	slob_t *prev, *cur, *best = *bests_prev = *aligned = NULL;
+	slob_t *prev, *cur, *best, *bests_prev, *aligned = NULL;
 	int delta = 0, units = SLOB_UNITS(size);
+	best = bests_prev = NULL;
 
 	for (prev = NULL, cur = sp->free; ; prev = cur, cur = slob_next(cur)) {
 		slobidx_t avail = slob_units(cur);
