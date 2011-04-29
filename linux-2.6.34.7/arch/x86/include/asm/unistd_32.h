@@ -343,6 +343,8 @@
 #define __NR_rt_tgsigqueueinfo	335
 #define __NR_perf_event_open	336
 #define __NR_recvmmsg		337
+#define __NR_get_slob_amt_free	338
+#define __NR_get_slob_amt_claimed	339
 
 #ifdef __KERNEL__
 
