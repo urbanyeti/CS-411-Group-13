@@ -449,8 +449,7 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align, int *
 static void *slob_alloc(size_t size, gfp_t gfp, int align, int node)
 {
     struct slob_page *sp;
-    struct slob_page *best = NULL;
-    struct list_head *prev;
+    struct slob_t *best = NULL;
     struct list_head *slob_list;
     slob_t *b = NULL;
     unsigned long flags;
@@ -478,16 +477,18 @@ static void *slob_alloc(size_t size, gfp_t gfp, int align, int node)
         b = slob_page_alloc(sp, size, align, &tmp);
      
 
-        if ( (!best && b ) || score > tmp - size )
+        if ( (!best && b ) && score > tmp )
         {
-            best = sp;
-            score = tmp - size;
-        }
+	    fix_not_best(best, size);
+            best = b;
+            score = tmp;
+        }else
+		fix_not_best(b, size);
     }
     spin_unlock_irqrestore(&slob_lock, flags);
 
     /* Not enough space: must allocate a new page */
-    if (!b) {
+    if (!best) {
         pageClaim = pageClaim + PAGE_SIZE; //page allocated
         b = slob_new_pages(gfp & ~__GFP_ZERO, 0, node);
         if (!b)
@@ -503,12 +504,13 @@ static void *slob_alloc(size_t size, gfp_t gfp, int align, int node)
         set_slob_page_free(sp, slob_list);
         b = slob_page_alloc(sp, size, align, &tmp);
         BUG_ON(!b);
+	best = b;
         spin_unlock_irqrestore(&slob_lock, flags);
     }
     if (unlikely((gfp & __GFP_ZERO) && b))
         memset(b, 0, size);
     assignmentClaim = assignmentClaim + size;
-    return b;
+    return best;
 }
 
 /*
