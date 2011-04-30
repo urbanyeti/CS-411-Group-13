@@ -295,6 +295,7 @@ static void fix_not_best(void *block, size_t size)
 	slob_t *prev, *next, *b = (slob_t *)block;
 	slobidx_t units;
 
+	early_printk("4");
 	if (unlikely(ZERO_OR_NULL_PTR(block)))
 		return;
 	BUG_ON(!size);
@@ -360,7 +361,8 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align, int *
 	slob_t *prev, *cur, *best, *bests_prev, *aligned = NULL;
 	int delta = 0, units = SLOB_UNITS(size);
 	best = bests_prev = NULL;
-
+	
+	early_printk("2");
 	for (prev = NULL, cur = sp->free; ; prev = cur, cur = slob_next(cur)) {
 		slobidx_t avail = slob_units(cur);
 
@@ -475,7 +477,7 @@ static void *slob_alloc(size_t size, gfp_t gfp, int align, int node)
             continue;
 
         b = slob_page_alloc(sp, size, align, &tmp);
-     
+    	early_printk("1");
 
         if ( (!best && b ) ||  score > tmp )
         {
