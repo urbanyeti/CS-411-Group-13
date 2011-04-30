@@ -86,8 +86,8 @@ typedef s32 slobidx_t;
 #endif
 
 /*Globals for sys calls*/
-static unsigned int pageClaim;
-static unsigned int assignmentClaim;
+static long pageClaim = 0;
+static long assignmentClaim = 0;
 
 
 struct slob_block {
@@ -354,7 +354,6 @@ static void *slob_alloc(size_t size, gfp_t gfp, int align, int node)
 
 		/* Attempt to alloc */
 		prev = sp->list.prev;
-		assignmentClaim = assignmentClaim + size; //allocated some memory
 		b = slob_page_alloc(sp, size, align);
 		if (!b)
 			continue;
@@ -390,6 +389,7 @@ static void *slob_alloc(size_t size, gfp_t gfp, int align, int node)
 	}
 	if (unlikely((gfp & __GFP_ZERO) && b))
 		memset(b, 0, size);
+	assignmentClaim = assignmentClaim + size; //allocated some memory
 	return b;
 }
 
@@ -707,11 +707,11 @@ void __init kmem_cache_init_late(void)
 	/* Nothing to do */
 }
 
-asmlinkage unsigned int sys_get_slob_amt_free(void)
+asmlinkage long sys_get_slob_amt_free(void)
 {
 	return pageClaim - assignmentClaim; //return the size of the pages minus the amount we've given away, the amount free
 }
-asmlinkage unsigned int sys_get_slob_amt_claimed(void)
+asmlinkage long sys_get_slob_amt_claimed(void)
 {
 	return pageClaim; //Return the size of the allocated pages.
 }
