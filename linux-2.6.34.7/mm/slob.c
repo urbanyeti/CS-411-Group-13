@@ -449,7 +449,7 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align, int *
 static void *slob_alloc(size_t size, gfp_t gfp, int align, int node)
 {
     struct slob_page *sp;
-    struct slob_t *best = NULL;
+    slob_t *best = NULL;
     struct list_head *slob_list;
     slob_t *b = NULL;
     unsigned long flags;
