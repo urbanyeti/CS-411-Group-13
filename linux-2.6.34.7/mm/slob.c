@@ -83,6 +83,7 @@
 #include <linux/list.h>
 #include <linux/kmemtrace.h>
 #include <linux/kmemleak.h>
+#include <linux/linkage.h>
 #include <asm/atomic.h>
 
 /*
@@ -98,6 +99,11 @@ typedef s16 slobidx_t;
 #else
 typedef s32 slobidx_t;
 #endif
+
+/*Globals for sys calls*/
+static long pageClaim = 0;
+static long assignmentClaim = 0;
+
 
 struct slob_block {
 	slobidx_t units;
@@ -486,6 +492,7 @@ static void *slob_alloc(size_t size, gfp_t gfp, int align, int node)
 
 	/* Not enough space: must allocate a new page */
 	if (!b) {
+		pageClaim = pageClaim + PAGE_SIZE; //page allocated
 		b = slob_new_pages(gfp & ~__GFP_ZERO, 0, node);
 		if (!b)
 			return NULL;
@@ -504,6 +511,7 @@ static void *slob_alloc(size_t size, gfp_t gfp, int align, int node)
 	}
 	if (unlikely((gfp & __GFP_ZERO) && b))
 		memset(b, 0, size);
+	assignmentClaim = assignmentClaim + size; //allocated some memory
 	return b;
 }
 
@@ -520,9 +528,9 @@ static void slob_free(void *block, int size)
 	if (unlikely(ZERO_OR_NULL_PTR(block)))
 		return;
 	BUG_ON(!size);
-
 	sp = slob_page(block);
 	units = SLOB_UNITS(size);
+	assignmentClaim = assignmentClaim - size; //assigned memory freed
 
 	spin_lock_irqsave(&slob_lock, flags);
 
@@ -534,6 +542,7 @@ static void slob_free(void *block, int size)
 		clear_slob_page(sp);
 		free_slob_page(sp);
 		slob_free_pages(b, 0);
+		pageClaim = pageClaim - PAGE_SIZE; //assigned page freed
 		return;
 	}
 
@@ -819,3 +828,13 @@ void __init kmem_cache_init_late(void)
 {
 	/* Nothing to do */
 }
+
+asmlinkage long sys_get_slob_amt_free(void)
+{
+	return pageClaim - assignmentClaim; //return the size of the pages minus the amount we've given away, the amount free
+}
+asmlinkage long sys_get_slob_amt_claimed(void)
+{
+	return pageClaim; //Return the size of the allocated pages.
+}
+
