@@ -453,7 +453,7 @@ static void *slob_alloc(size_t size, gfp_t gfp, int align, int node)
     struct list_head *slob_list;
     slob_t *b = NULL;
     unsigned long flags;
-    int tmp;
+    int tmp = SLOB_UNITS(PAGE_SIZE) + 1;
     int score = 0;
 
     slob_list = &free_slob_small;
@@ -505,7 +505,7 @@ static void *slob_alloc(size_t size, gfp_t gfp, int align, int node)
         INIT_LIST_HEAD(&sp->list);
         set_slob(b, SLOB_UNITS(PAGE_SIZE), b + SLOB_UNITS(PAGE_SIZE));
         set_slob_page_free(sp, slob_list);
-        b = slob_page_alloc(sp, size, align, &tmp);
+        b = slob_page_alloc(sp, size, align, NULL);
         BUG_ON(!b);
 	best = b;
         spin_unlock_irqrestore(&slob_lock, flags);
