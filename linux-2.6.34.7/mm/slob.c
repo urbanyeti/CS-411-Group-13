@@ -353,8 +353,9 @@ out:
 
 /*
  * Allocate the best fit slob block within a given slob_page sp.
+ * @best_size: a pointer with the current size of the best block.
  */
-static void *slob_page_alloc(struct slob_page *sp, size_t size, int align)
+static void *slob_page_alloc(struct slob_page *sp, size_t size, int align, int *best_size)
 {
 	slob_t *prev, *cur, *best, *bests_prev, *aligned = NULL;
 	int delta = 0, units = SLOB_UNITS(size);
@@ -368,7 +369,7 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align)
 			delta = aligned - cur;
 		}
 
-		if (avail >= units + delta && (!best || avail - delta < slob_units(best)) ) { /* room enough? AND better than best*/
+		if (avail >= units + delta && (!best_size || avail - delta < *best_size)) { /* room enough? AND better than best*/
 			slob_t *next;
 
 			if (delta) { /* need to fragment head to align? */
@@ -404,6 +405,7 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align)
 				else
 					sp->free = next;
 				best = cur;
+				*best_size = slob_units(cur);
 			} else { /* fragment */
 				if (best && !bests_prev) {
 				    set_slob(best, units + slob_units(sp->free), slob_next(sp->free));
@@ -425,6 +427,7 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align)
 					bests_prev = prev;
 				}else
 					sp->free = cur + units;
+				*best_size = slob_units(cur);
 				set_slob(cur + units, avail - units, next);
 				best = cur;
 			}
