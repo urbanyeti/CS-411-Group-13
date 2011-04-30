@@ -448,73 +448,71 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align, int *
  */
 static void *slob_alloc(size_t size, gfp_t gfp, int align, int node)
 {
-	struct slob_page *sp;
-	struct list_head *prev;
-	struct list_head *slob_list;
-	slob_t *b = NULL;
-	unsigned long flags;
+    struct slob_page *sp;
+    struct slob_page *best = NULL;
+    struct list_head *prev;
+    struct list_head *slob_list;
+    slob_t *b = NULL;
+    unsigned long flags;
+    int* tmp;
+    int score;
 
-	if (size < SLOB_BREAK1)
-		slob_list = &free_slob_small;
-	else if (size < SLOB_BREAK2)
-		slob_list = &free_slob_medium;
-	else
-		slob_list = &free_slob_large;
+    if (size < SLOB_BREAK1)
+        slob_list = &free_slob_small;
+    else if (size < SLOB_BREAK2)
+        slob_list = &free_slob_medium;
+    else
+        slob_list = &free_slob_large;
 
-	spin_lock_irqsave(&slob_lock, flags);
-	/* Iterate through each partially free page, try to find room */
-	list_for_each_entry(sp, slob_list, list) {
+    spin_lock_irqsave(&slob_lock, flags);
+
+    /* Iterate through each partially free page, try to find room */
+    list_for_each_entry(sp, slob_list, list) {
 #ifdef CONFIG_NUMA
-		/*
-		 * If there's a node specification, search for a partial
-		 * page with a matching node id in the freelist.
-		 */
-		if (node != -1 && page_to_nid(&sp->page) != node)
-			continue;
+        /*
+         * If there's a node specification, search for a partial
+         * page with a matching node id in the freelist.
+         */
+        if (node != -1 && page_to_nid(&sp->page) != node)
+            continue;
 #endif
-		/* Enough room on this page? */
-		if (sp->units < SLOB_UNITS(size))
-			continue;
+        /* Enough room on this page? */
+        if (sp->units < SLOB_UNITS(size))
+            continue;
 
-		/* Attempt to alloc */
-		prev = sp->list.prev;
-		b = slob_page_alloc(sp, size, align);
-		if (!b)
-			continue;
+        b = slob_page_alloc(sp, size, align, tmp);
+     
 
-		/* Improve fragment distribution and reduce our average
-		 * search time by starting our next search here. (see
-		 * Knuth vol 1, sec 2.5, pg 449) */
-		if (prev != slob_list->prev &&
-				slob_list->next != prev->next)
-			list_move_tail(slob_list, prev->next);
-		break;
-	}
-	spin_unlock_irqrestore(&slob_lock, flags);
+        if ( (!best && b ) || score > tmp - size )
+        {
+            best = sp;
+            score = tmp - size;
+        }
+    }
+    spin_unlock_irqrestore(&slob_lock, flags);
 
-	/* Not enough space: must allocate a new page */
-	if (!b) {
-		pageClaim = pageClaim + PAGE_SIZE; //page allocated
-		b = slob_new_pages(gfp & ~__GFP_ZERO, 0, node);
-		if (!b)
-			return NULL;
-		sp = slob_page(b);
-		set_slob_page(sp);
+    /* Not enough space: must allocate a new page */
+    if (!b) {
+        pageClaim = pageClaim + PAGE_SIZE; //page allocated
+        b = slob_new_pages(gfp & ~__GFP_ZERO, 0, node);
+        if (!b)
+            return NULL;
+        sp = slob_page(b);
+        set_slob_page(sp);
 
-		spin_lock_irqsave(&slob_lock, flags);
-		sp->units = SLOB_UNITS(PAGE_SIZE);
-		sp->free = b;
-		INIT_LIST_HEAD(&sp->list);
-		set_slob(b, SLOB_UNITS(PAGE_SIZE), b + SLOB_UNITS(PAGE_SIZE));
-		set_slob_page_free(sp, slob_list);
-		b = slob_page_alloc(sp, size, align);
-		BUG_ON(!b);
-		spin_unlock_irqrestore(&slob_lock, flags);
-	}
-	if (unlikely((gfp & __GFP_ZERO) && b))
-		memset(b, 0, size);
-	assignmentClaim = assignmentClaim + size; //allocated some memory
-	return b;
+        spin_lock_irqsave(&slob_lock, flags);
+        sp->units = SLOB_UNITS(PAGE_SIZE);
+        sp->free = b;
+        INIT_LIST_HEAD(&sp->list);
+        set_slob(b, SLOB_UNITS(PAGE_SIZE), b + SLOB_UNITS(PAGE_SIZE));
+        set_slob_page_free(sp, slob_list);
+        b = slob_page_alloc(sp, size, align);
+        BUG_ON(!b);
+        spin_unlock_irqrestore(&slob_lock, flags);
+    }
+    if (unlikely((gfp & __GFP_ZERO) && b))
+        memset(b, 0, size);
+    return b;
 }
 
 /*
