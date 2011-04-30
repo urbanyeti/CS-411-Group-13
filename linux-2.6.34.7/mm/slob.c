@@ -457,12 +457,7 @@ static void *slob_alloc(size_t size, gfp_t gfp, int align, int node)
     int tmp;
     int score;
 
-    if (size < SLOB_BREAK1)
-        slob_list = &free_slob_small;
-    else if (size < SLOB_BREAK2)
-        slob_list = &free_slob_medium;
-    else
-        slob_list = &free_slob_large;
+    slob_list = &free_slob_small;
 
     spin_lock_irqsave(&slob_lock, flags);
 
