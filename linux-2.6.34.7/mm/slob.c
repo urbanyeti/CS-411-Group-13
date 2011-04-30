@@ -454,7 +454,7 @@ static void *slob_alloc(size_t size, gfp_t gfp, int align, int node)
     slob_t *b = NULL;
     unsigned long flags;
     int tmp;
-    int score;
+    int score = 0;
 
     slob_list = &free_slob_small;
 
@@ -477,13 +477,16 @@ static void *slob_alloc(size_t size, gfp_t gfp, int align, int node)
         b = slob_page_alloc(sp, size, align, &tmp);
      
 
-        if ( (!best && b ) && score > tmp )
+        if ( (!best && b ) ||  score > tmp )
         {
-	    fix_not_best(best, size);
+	    if (best)
+	    	fix_not_best(best, size);
             best = b;
             score = tmp;
-        }else
-		fix_not_best(b, size);
+        }else{
+		if (b)
+			fix_not_best(b, size);
+	}
     }
     spin_unlock_irqrestore(&slob_lock, flags);
 
