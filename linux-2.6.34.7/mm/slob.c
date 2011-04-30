@@ -369,8 +369,9 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align, int *
 			delta = aligned - cur;
 		}
 
-		if (avail >= units + delta && (!best_size || avail - delta < *best_size)) { /* room enough? AND better than best*/
+		if (avail >= units + delta && (!best_size || avail < *best_size)) { /* room enough? AND better than best*/
 			slob_t *next;
+			*best_size = avail;
 
 			if (delta) { /* need to fragment head to align? */
 				next = slob_next(cur);
@@ -405,7 +406,6 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align, int *
 				else
 					sp->free = next;
 				best = cur;
-				*best_size = slob_units(cur);
 			} else { /* fragment */
 				if (best && !bests_prev) {
 				    set_slob(best, units + slob_units(sp->free), slob_next(sp->free));
@@ -427,7 +427,6 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align, int *
 					bests_prev = prev;
 				}else
 					sp->free = cur + units;
-				*best_size = slob_units(cur);
 				set_slob(cur + units, avail - units, next);
 				best = cur;
 			}
