@@ -361,7 +361,7 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align, int *
 	slob_t *prev, *cur, *best, *bests_prev, *aligned = NULL;
 	int delta = 0, units = SLOB_UNITS(size);
 	best = bests_prev = NULL;
-	
+
 	early_printk("2");
 	for (prev = NULL, cur = sp->free; ; prev = cur, cur = slob_next(cur)) {
 		slobidx_t avail = slob_units(cur);
@@ -507,9 +507,9 @@ static void *slob_alloc(size_t size, gfp_t gfp, int align, int node)
         INIT_LIST_HEAD(&sp->list);
         set_slob(b, SLOB_UNITS(PAGE_SIZE), b + SLOB_UNITS(PAGE_SIZE));
         set_slob_page_free(sp, slob_list);
-        b = slob_page_alloc(sp, size, align, NULL);
+        b = slob_page_alloc(sp, size, align, &tmp);
         BUG_ON(!b);
-	best = b;
+        best = b;
         spin_unlock_irqrestore(&slob_lock, flags);
     }
     if (unlikely((gfp & __GFP_ZERO) && b))
