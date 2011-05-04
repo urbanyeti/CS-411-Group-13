@@ -416,7 +416,7 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align, int *
 				}else if (best && bests_prev) {
 				    nxt_tmp = slob_next(bests_prev);
 				    if (best + units == nxt_tmp)
-                        set_slob(best, units + slob_units(nxt_tmp), slob_next(nxt_tmp);
+                        set_slob(best, units + slob_units(nxt_tmp), slob_next(nxt_tmp));
                     else
                         set_slob(best, units, nxt_tmp);
 
