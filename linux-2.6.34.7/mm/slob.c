@@ -372,7 +372,7 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align, int *
 		}
 
 		if (avail >= units + delta && (*best_size < 0 || avail < *best_size)) { /* room enough? AND better than best*/
-			slob_t *next;
+			slob_t *next, *nxt_tmp;
 			*best_size = avail;
 
 			if (delta) { /* need to fragment head to align? */
@@ -390,10 +390,11 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align, int *
 				    set_slob(best, units + slob_units(sp->free), slob_next(sp->free));
 					sp->free = best;
 				}else if (best && bests_prev) {
-					if (best + units == slob_next(bests_prev))
-                        set_slob(best, units + slob_units(slob_next(bests_prev)), slob_next(slob_next(bests_prev)));
+				    nxt_tmp = slob_next(bests_prev);
+					if (best + units == nxt_tmp)
+                        set_slob(best, units + slob_units(nxt_tmp), slob_next(nxt_tmp));
 					else
-                        set_slob(best, units, slob_next(bests_prev));
+                        set_slob(best, units, nxt_tmp);
 
 					if (bests_prev + slob_units(bests_prev) == best)
 						set_slob(bests_prev, slob_units(bests_prev) + slob_units(best), slob_next(best));
@@ -413,10 +414,11 @@ static void *slob_page_alloc(struct slob_page *sp, size_t size, int align, int *
 				    set_slob(best, units + slob_units(sp->free), slob_next(sp->free));
 					sp->free = best;
 				}else if (best && bests_prev) {
-				    if (best + units == slob_next(bests_prev))
-                        set_slob(best, units + slob_units(slob_next(bests_prev)), slob_next(slob_next(bests_prev)));
+				    nxt_tmp = slob_next(bests_prev);
+				    if (best + units == nxt_tmp)
+                        set_slob(best, units + slob_units(nxt_tmp), slob_next(nxt_tmp);
                     else
-                        set_slob(best, units, slob_next(bests_prev));
+                        set_slob(best, units, nxt_tmp);
 
 					if (bests_prev + slob_units(bests_prev) == best)
 						set_slob(bests_prev, slob_units(bests_prev) + slob_units(best), slob_next(best));
