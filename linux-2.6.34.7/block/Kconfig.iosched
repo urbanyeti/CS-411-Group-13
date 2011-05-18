@@ -12,6 +12,16 @@ config IOSCHED_NOOP
 	  that do their own scheduling and require only minimal assistance from
 	  the kernel.
 
+config IOSCHED_CLOOK
+	bool
+	default y
+	---help---
+	  The no-op I/O scheduler is a minimal scheduler that does basic merging
+	  and sorting. Its main uses include non-disk based block devices like
+	  memory devices, and specialised software or hardware environments
+	  that do their own scheduling and require only minimal assistance from
+	  the kernel.
+
 config IOSCHED_DEADLINE
 	tristate "Deadline I/O scheduler"
 	default y
@@ -64,6 +74,9 @@ choice
 
 	config DEFAULT_NOOP
 		bool "No-op"
+
+	config DEFAULT_CLOOK
+		bool "CLOOK" if IOSCHED_CLOOK=y
 
 endchoice
 
