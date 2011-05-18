@@ -47,7 +47,7 @@ static void clook_add_request(struct request_queue *q, struct request *rq)
 		return;
 	}
 	list_for_each_entry(pos, &nd->queue, queuelist){
-		if(list_entry(pos, struct request, queuelist)->sector > blk_rq_pos(rq)){
+		if(pos->sector > blk_rq_pos(rq)){
 			list_add_tail(&rq->queuelist, pos);
 			return;
 		}
