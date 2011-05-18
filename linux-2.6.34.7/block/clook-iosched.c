@@ -32,7 +32,7 @@ static int clook_dispatch(struct request_queue *q, int force)
 		rq = list_entry(nd->queue.next, struct request, queuelist);
 		list_del_init(&rq->queuelist);
 		elv_dispatch_sort(q, rq);
-		nd->last_sector = rq->sector + rq->nr_sectors; /* update head location */
+		nd->last_sector = blk_rq_pos(rq) + blk_rq_sectors(rq); /* update head location */
 		return 1;
 	}
 	return 0;
@@ -47,7 +47,7 @@ static void clook_add_request(struct request_queue *q, struct request *rq)
 		return;
 	}
 	list_for_each_entry(pos, &nd->queue, queuelist){
-		if(pos->sector > blk_rq_pos(rq)){
+		if(blk_rq_pos(pos) > blk_rq_pos(rq)){
 			list_add_tail(&rq->queuelist, pos);
 			return;
 		}
