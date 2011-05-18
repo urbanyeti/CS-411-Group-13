@@ -14,6 +14,7 @@
 
 struct clook_data {
 	struct list_head queue;
+	sector_t last_sector; /* Head Location  */
 };
 
 static void clook_merged_requests(struct request_queue *q, struct request *rq,
@@ -31,6 +32,7 @@ static int clook_dispatch(struct request_queue *q, int force)
 		rq = list_entry(nd->queue.next, struct request, queuelist);
 		list_del_init(&rq->queuelist);
 		elv_dispatch_sort(q, rq);
+		nd->last_sector = rq->sector + rq->nr_sectors; /* update head location */
 		return 1;
 	}
 	return 0;
@@ -39,8 +41,18 @@ static int clook_dispatch(struct request_queue *q, int force)
 static void clook_add_request(struct request_queue *q, struct request *rq)
 {
 	struct clook_data *nd = q->elevator->elevator_data;
-
-	list_add_tail(&rq->queuelist, &nd->queue);
+	struct list_head *pos;
+	if(list_empty(&nd->queue)){
+		list_add(rq->queuelist, &nd->queue);
+		return;
+	}
+	list_for_each_entry(pos, &nd->queue, queuelist){
+		if(list_entry(pos, struct request, queuelist)->sector > blk_rq_pos(rq)){
+			list_add_tail(&rq->queuelist, pos);
+			return;
+		}
+	}
+	list_add_tail(rq->queuelist, &nd->queue);
 }
 
 static int clook_queue_empty(struct request_queue *q)
@@ -78,6 +90,7 @@ static void *clook_init_queue(struct request_queue *q)
 	if (!nd)
 		return NULL;
 	INIT_LIST_HEAD(&nd->queue);
+	nd->last_sector = 0;
 	return nd;
 }
 
