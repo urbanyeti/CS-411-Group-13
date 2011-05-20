@@ -33,7 +33,7 @@ static int clook_dispatch(struct request_queue *q, int force)
 		list_del_init(&rq->queuelist);
 		elv_dispatch_sort(q, rq);
 		nd->last_sector = blk_rq_pos(rq) + blk_rq_sectors(rq); /* update head location */
-		printk("[CLOOK] dsp %s %ul \n", rq_data_dir(rq) ? "W":"R", blk_rq_pos(rq));
+		printk("[CLOOK] dsp %s %llu head: %llu \n", rq_data_dir(rq) ? "W":"R", blk_rq_pos(rq), nd->last_sector);
 		return 1;
 	}
 	return 0;
@@ -45,19 +45,19 @@ static void clook_add_request(struct request_queue *q, struct request *rq)
 	struct request *pos;
 	if(list_empty(&nd->queue)){
 		list_add(&rq->queuelist, &nd->queue);
-		printk("[CLOOK] add %s %ul \n", rq_data_dir(rq) ? "W":"R", blk_rq_pos(rq));
+		printk("[CLOOK] add %s %llu \n", rq_data_dir(rq) ? "W":"R", blk_rq_pos(rq));
 		return;
 	}
 	list_for_each_entry(pos, &nd->queue, queuelist){ //might need to check last_pos val
 		if(blk_rq_pos(pos) > blk_rq_pos(rq)){
 			list_add_tail(&rq->queuelist, &pos->queuelist);
-			printk("[CLOOK] add %s %ul \n", rq_data_dir(rq) ? "W":"R", 
+			printk("[CLOOK] add %s %llu \n", rq_data_dir(rq) ? "W":"R", 
 				blk_rq_pos(rq));
 			return;
 		}
 	}
 	list_add_tail(&rq->queuelist, &nd->queue);
-	printk("[CLOOK] add %s %ul \n", rq_data_dir(rq) ? "W":"R", blk_rq_pos(rq));
+	printk("[CLOOK] add %s %llu \n", rq_data_dir(rq) ? "W":"R", blk_rq_pos(rq));
 }
 
 static int clook_queue_empty(struct request_queue *q)
