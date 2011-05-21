@@ -51,9 +51,9 @@ static void clook_add_request(struct request_queue *q, struct request *rq)
 	list_for_each_entry(pos, &nd->queue, queuelist){ //might need to check last_pos val
 		if((blk_rq_pos(pos) > blk_rq_pos(rq) && 
 			(blk_rq_pos(rq) > nd->last_sector || 
-			(blk_rq_pos(pos) < nd->last_sector)) || 
+			blk_rq_pos(pos) < nd->last_sector)) || 
 		(blk_rq_pos(pos) < nd->last_sector && 
-		blk_rq_pos(rq) >nd->last_sector))){
+		blk_rq_pos(rq) >nd->last_sector)){
 			list_add_tail(&rq->queuelist, &pos->queuelist);
 			printk("[CLOOK] add %s %llu \n", rq_data_dir(rq) ? "W":"R", 
 				blk_rq_pos(rq));
