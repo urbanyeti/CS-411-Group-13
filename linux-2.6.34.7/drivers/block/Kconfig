@@ -15,6 +15,12 @@ menuconfig BLK_DEV
 
 if BLK_DEV
 
+config OSU_RD
+	tristate "Oregon State U Ramdisk
+	---help---
+	  This is the ram disk for programming assignment 4.  Choose M to 
+	  compile the driver as a module.
+
 config BLK_DEV_FD
 	tristate "Normal floppy disk support"
 	depends on ARCH_MAY_HAVE_PC_FDC
