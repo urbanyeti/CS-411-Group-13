@@ -8,11 +8,9 @@
   * as a reference.
   */
 
-  /* Working on getting the code to compile.  I removed the request modes and a
-   * a lot of the extra request functions because they are unneccessary and harder
-   * to write in the newer version of the kernel. Someone could add in the module
-   * params and add checks to the setup function. Someone else might start adding
-   * in printk stmts.
+  /* I added the module param and did some checking in the setup function.  I don't
+   * know if the checking is needed or not. I also added some printk's, but more
+   * might be beneficial.
    */
 
  /*
@@ -39,6 +37,8 @@
  #include <linux/buffer_head.h>  /* invalidate_bdev */
  #include <linux/bio.h>
 
+ #include <asm-generic/bitops.h> /* fls() */
+
  MODULE_LICENSE("Dual BSD/GPL");
 
  static int osurd_major = 0;
@@ -49,6 +49,8 @@
  module_param(nsectors, int, 0);
  static int ndevices = 1;
  module_param(ndevices, int, 0);
+ static int disksize = 0;
+ module_param(disksize, int, 0);
 
 
  /*
@@ -98,10 +100,13 @@
                  printk (KERN_NOTICE "Beyond-end write (%ld %ld)\n", offset, nbytes);
                  return;
          }
-         if (write)
+         if (write){
                  memcpy(dev->data + offset, buffer, nbytes);
-         else
+                 printk("Osurd: wrote\n");
+         }else{
                  memcpy(buffer, dev->data + offset, nbytes);
+                 printk("Osurd: read\n");
+         }
  }
 
  /*
@@ -111,6 +116,8 @@
  {
          struct request *req;
          struct osurd_dev *dev;
+
+         printk("Osurd: request called\n");
 
          req = blk_fetch_request(q);
          dev = req->rq_disk->private_data;
@@ -136,6 +143,7 @@
  {
          struct osurd_dev *dev = bdev->bd_disk->private_data;
          del_timer_sync(&dev->timer);
+         printk("Osurd: open called\n");
          spin_lock(&dev->lock);
          if (! dev->users)
                  check_disk_change(bdev);
@@ -147,6 +155,8 @@
  static int osurd_release(struct gendisk *gd, fmode_t mode)
  {
          struct osurd_dev *dev = gd->private_data;
+
+         printk("Osurd: release called\n");
 
          spin_lock(&dev->lock);
          dev->users--;
@@ -165,6 +175,8 @@
   */
  int osurd_media_changed(struct gendisk *gd)
  {
+         printk("Osurd: media changed called.\n");
+
          struct osurd_dev *dev = gd->private_data;
 
          return dev->media_change;
@@ -176,6 +188,8 @@
   */
  int osurd_revalidate(struct gendisk *gd)
  {
+         printk("Osurd: revalidate called.\n");
+
          struct osurd_dev *dev = gd->private_data;
 
          if (dev->media_change) {
@@ -191,6 +205,8 @@
   */
  void osurd_invalidate(unsigned long ldev)
  {
+         printk("Osurd: invalidate called.\n");
+
          struct osurd_dev *dev = (struct osurd_dev *) ldev;
 
          spin_lock(&dev->lock);
@@ -208,6 +224,8 @@
  int osurd_ioctl (struct block_device *bdev, fmode_t mode,
                   unsigned int cmd, unsigned long arg)
  {
+         printk("Osurd: ioctl called.\n");
+
          long size;
          struct hd_geometry geo;
          struct osurd_dev *dev = bdev->bd_disk->private_data;
@@ -234,6 +252,8 @@
  }
 
 int osurd_getgeo(struct block_device * bdev, struct hd_geometry * geo) {
+    printk("Osurd: getgeo called.\n");
+
 	long size;
 	struct osurd_dev *dev = bdev->bd_disk->private_data;
 
@@ -264,14 +284,25 @@ int osurd_getgeo(struct block_device * bdev, struct hd_geometry * geo) {
  /*
   * Set up our internal device.
   */
- static void setup_device(struct osurd_dev *dev, int which)
+ static int setup_device(struct osurd_dev *dev, int which)
  {
-         /* Check params?
-          * Hardsect % 512 should be zero and > 512
-          * Disksize % 512 should be zero?
-          * Disksize % Hardsect should be zero (to get right number of sectors)
-          */
+         printk("Osurd: setup called.\n");
 
+         /*
+          * Check module params
+          */
+         if(hardsect_size < 512 || hardsect_size % 512 != 0){
+                 printk (KERN_NOTICE "hardsect size invalid.\n");
+                 return -EINVAL;
+         }
+
+         if(disksize){
+                 if(disksize % 512 != 0){
+                      printk ("hardsect size invalid. Switching to nearest power of 2\n");
+                      disksize = fls(disksize) << 1;
+                 }
+                 nsectors = disksize/hardsect_size;
+         }
          /*
           * Get some memory.
           */
@@ -280,7 +311,7 @@ int osurd_getgeo(struct block_device * bdev, struct hd_geometry * geo) {
          dev->data = vmalloc(dev->size);
          if (dev->data == NULL) {
                  printk (KERN_NOTICE "vmalloc failure.\n");
-                 return;
+                 return -ENOMEM;
          }
          spin_lock_init(&dev->lock);
 
@@ -322,6 +353,7 @@ int osurd_getgeo(struct block_device * bdev, struct hd_geometry * geo) {
    out_vfree:
          if (dev->data)
                  vfree(dev->data);
+         return -ENOMEM;
  }
 
 
@@ -329,6 +361,10 @@ int osurd_getgeo(struct block_device * bdev, struct hd_geometry * geo) {
  static int __init osurd_init(void)
  {
          int i;
+         int ret = 0;
+
+         printk("Osurd: init called\n");
+
          /*
           * Get registered.
           */
@@ -341,21 +377,27 @@ int osurd_getgeo(struct block_device * bdev, struct hd_geometry * geo) {
           * Allocate the device array, and initialize each one.
           */
          Devices = kmalloc(ndevices*sizeof (struct osurd_dev), GFP_KERNEL);
-         if (Devices == NULL)
+         if (Devices == NULL){
+                 ret = -ENOMEM;
                  goto out_unregister;
+         }
          for (i = 0; i < ndevices; i++)
-                 setup_device(Devices + i, i);
+                 ret = setup_device(Devices + i, i);
+                 if(ret)
+                         goto out_unregister;
 
          return 0;
 
    out_unregister:
          unregister_blkdev(osurd_major, "osurd");
-         return -ENOMEM;
+         return ret;
  }
 
  static void osurd_exit(void)
  {
          int i;
+
+         printk("Osurd: exit called.\n");
 
          for (i = 0; i < ndevices; i++) {
                  struct osurd_dev *dev = Devices + i;
