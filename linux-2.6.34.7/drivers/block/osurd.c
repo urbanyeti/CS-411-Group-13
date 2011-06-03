@@ -51,7 +51,8 @@
  module_param(disksize, int, 0);
 
  static char *key = "password";
- static int key_length = 8;
+ module_param(key, char, 0);
+ static int key_length = strlen(key);
 
  /*
   * Minor number and partition management.
@@ -168,16 +169,28 @@
          req = blk_fetch_request(q);
          dev = req->rq_disk->private_data;
          while (req != NULL) {
-                 if (!blk_fs_request(req)) {
-                         printk (KERN_NOTICE "Skip non-CMD request\n");
-                         __blk_end_request_all(req, -EIO);
-                         continue;
-                 }
-                 osurd_transfer(dev, blk_rq_pos(req), blk_rq_cur_sectors(req),
-                 req->buffer, rq_data_dir(req));
-                 if ( ! __blk_end_request_cur(req, 0) ) {
-                         req = blk_fetch_request(q);
-                 }
+                  if (!blk_fs_request(req)) {
+                          printk (KERN_NOTICE "Skip non-CMD request\n");
+                          __blk_end_request_all(req, -EIO);
+                          continue;
+                  }
+		 enc_size = (req->current_nr_sectors)*KERNEL_SECTOR_SIZE;
+		 enc_area = kmalloc(enc_size, GFP_KERNEL);
+		 if(rq_data_dir(req)) {
+			 memcpy(enc_area, req->buffer, enc_size);
+			 osurd_encrpyt(enc_area, enc_size, 1);
+		 	 osurd_transfer(dev, req->sector, req->current_nr_sectors, enc_area, rq_data_dir(req));
+		
+		 } else{
+			 osurd_encrpyt(enc_area, enc_size, 1);
+			 osurd_transfer(dev, req->sector, req->current_nr_sectors, enc_area, rq_data_dir(req));
+			 memcpy(req->buffer, enc_area, enc_size);
+		 }
+		 kfree(enc_area);
+		 end_request(req,1);
+		 if( ! __blk_end_request_cur(req, 0) ) {
+			 req = blk_fetch_request(q);
+		 }
          }
  }
 
