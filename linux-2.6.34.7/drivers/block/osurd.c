@@ -4,6 +4,8 @@
   * A simple ram disk driver.
   * Code is modified from the 2.6.31.13 version of the sbull driver
   * from http://www.cs.fsu.edu/~baker/devices/lxr/http/source/ldd-examples/sbull/sbull.c
+  * Also used http://blog.superpat.com/2010/05/04/a-simple-block-driver-for-linux-kernel-2-6-31/
+  * as a reference.
   */
 
   /* Working on getting the code to compile.  I removed the request modes and a
@@ -12,15 +14,6 @@
    * params and add checks to the setup function. Someone else might start adding
    * in printk stmts.
    */
-
-  /* This version still has a lot changes that need to be made to it.  We would have to
-   * change the request stuff and the inode stuff.  The link at the end should help.
-   * It also has a lot of extra code that we would have to go through and probably
-   * change.  It has a lot of code already written on the other hand.  We may want to
-   * use the code from http://blog.superpat.com/2010/05/04/a-simple-block-driver-for-linux-kernel-2-6-31/
-   * instead.
-   */
-
 
  /*
   * Sample disk driver, from the beginning.
@@ -54,7 +47,7 @@
  module_param(hardsect_size, int, 0);
  static int nsectors = 1024;     /* How big the drive is */
  module_param(nsectors, int, 0);
- static int ndevices = 4;
+ static int ndevices = 1;
  module_param(ndevices, int, 0);
 
 
@@ -118,19 +111,15 @@
  {
          struct request *req;
 
-         while ((req = blk_fetch_request(q)) != NULL) {
-                 struct osurd_dev *dev = req->rq_disk->private_data;
-                 if (! blk_fs_request(req)) {
-                         printk (KERN_NOTICE "Skip non-fs request\n");
-                         blk_end_request(req, -EIO, blk_rq_cur_sectors(req));
+         req = blk_fetch_request(q);
+         while (req != NULL) {
+                 if (!blk_fs_request(req)) {
+                         printk (KERN_NOTICE "Skip non-CMD request\n");
+                         __blk_end_request_all(req, -EIO);
                          continue;
                  }
-     //          printk (KERN_NOTICE "Req dev %d dir %ld sec %ld, nr %d f %lx\n",
-     //                          dev - Devices, rq_data_dir(req),
-     //                          req->sector, req->current_nr_sectors,
-     //                          req->flags);
-                 osurd_transfer(dev, blk_rq_pos(req), blk_rq_cur_sectors(req),
-                                 req->buffer, rq_data_dir(req));
+                 osurd_transfer(&Device, blk_rq_pos(req), blk_rq_cur_sectors(req),
+                 req->buffer, rq_data_dir(req));
                  if ( ! __blk_end_request_cur(req, 0) ) {
                          req = blk_fetch_request(q);
                  }
