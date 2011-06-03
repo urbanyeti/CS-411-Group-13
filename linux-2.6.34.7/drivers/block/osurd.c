@@ -5,7 +5,7 @@
   * Code is modified from the 2.6.31.13 version of the sbull driver
   * from http://www.cs.fsu.edu/~baker/devices/lxr/http/source/ldd-examples/sbull/sbull.c
   * Also used http://blog.superpat.com/2010/05/04/a-simple-block-driver-for-linux-kernel-2-6-31/
-  * as a reference.
+  * and code from Linux Device Drivers, Third Edition (O'Reilly Media) for reference.
   */
 
   /* I added the module param and did some checking in the setup function.  I don't
