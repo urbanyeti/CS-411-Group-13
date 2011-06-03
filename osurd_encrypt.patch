@@ -1,0 +1,1953 @@
+From adca45174016617d19870e45519e0796749728c5 Mon Sep 17 00:00:00 2001
+From: admirej <admirej@onid.orst.edu>
+Date: Wed, 1 Jun 2011 10:24:58 -0700
+Subject: [PATCH 01/14] Added info to Kconfig and Makefile. Also added a blank
+ file for osurd.c
+
+---
+ linux-2.6.34.7/drivers/block/Kconfig  |    6 ++++++
+ linux-2.6.34.7/drivers/block/Makefile |    2 ++
+ linux-2.6.34.7/drivers/block/osurd.c  |    1 +
+ 3 files changed, 9 insertions(+), 0 deletions(-)
+ create mode 100644 linux-2.6.34.7/drivers/block/osurd.c
+
+diff --git a/linux-2.6.34.7/drivers/block/Kconfig b/linux-2.6.34.7/drivers/block/Kconfig
+index 77bfce5..c09f93b 100644
+--- a/linux-2.6.34.7/drivers/block/Kconfig
++++ b/linux-2.6.34.7/drivers/block/Kconfig
+@@ -15,6 +15,12 @@ menuconfig BLK_DEV
+ 
+ if BLK_DEV
+ 
++config OSU_RD
++	tristate "Oregon State U Ramdisk
++	---help---
++	  This is the ram disk for programming assignment 4.  Choose M to 
++	  compile the driver as a module.
++
+ config BLK_DEV_FD
+ 	tristate "Normal floppy disk support"
+ 	depends on ARCH_MAY_HAVE_PC_FDC
+diff --git a/linux-2.6.34.7/drivers/block/Makefile b/linux-2.6.34.7/drivers/block/Makefile
+index aff5ac9..f816b32 100644
+--- a/linux-2.6.34.7/drivers/block/Makefile
++++ b/linux-2.6.34.7/drivers/block/Makefile
+@@ -38,4 +38,6 @@ obj-$(CONFIG_BLK_DEV_HD)	+= hd.o
+ obj-$(CONFIG_XEN_BLKDEV_FRONTEND)	+= xen-blkfront.o
+ obj-$(CONFIG_BLK_DEV_DRBD)     += drbd/
+ 
++obj-$(CONFIG_OSU_RD)		+= osurd.o
++
+ swim_mod-objs	:= swim.o swim_asm.o
+diff --git a/linux-2.6.34.7/drivers/block/osurd.c b/linux-2.6.34.7/drivers/block/osurd.c
+new file mode 100644
+index 0000000..403e982
+--- /dev/null
++++ b/linux-2.6.34.7/drivers/block/osurd.c
+@@ -0,0 +1 @@
++/*holder*/
+-- 
+1.7.4.4
+
+
+From 45b891acc43a87e1739be06e87722da59505de0d Mon Sep 17 00:00:00 2001
+From: admirej <admirej@onid.orst.edu>
+Date: Wed, 1 Jun 2011 11:07:55 -0700
+Subject: [PATCH 02/14] Added some code from the web, but may want to use
+ different code.
+
+---
+ linux-2.6.34.7/drivers/block/osurd.c |  479 +++++++++++++++++++++++++++++++++-
+ 1 files changed, 478 insertions(+), 1 deletions(-)
+
+diff --git a/linux-2.6.34.7/drivers/block/osurd.c b/linux-2.6.34.7/drivers/block/osurd.c
+index 403e982..6d2b30f 100644
+--- a/linux-2.6.34.7/drivers/block/osurd.c
++++ b/linux-2.6.34.7/drivers/block/osurd.c
+@@ -1 +1,478 @@
+-/*holder*/
++ /* CS 411 Project 4 Team 13
++  * Lewis Valentine, Daniel Urbanski, Dwight Trahin, James Admire
++  * osurd.c
++  * A simple ram disk driver.
++  * Code is modified from the 2.6.31.13 version of the sbull driver
++  * from http://www.cs.fsu.edu/~baker/devices/lxr/http/source/ldd-examples/sbull/sbull.c
++  */
++
++  /* This version still has a lot changes that need to be made to it.  We would have to
++   * change the request stuff and the inode stuff.  The link at the end should help.
++   * It also has a lot of extra code that we would have to go through and probably
++   * change.  It has a lot of code already written on the other hand.  We may want to
++   * use the code from http://blog.superpat.com/2010/05/04/a-simple-block-driver-for-linux-kernel-2-6-31/
++   * instead.
++   */
++
++
++ /*
++  * Sample disk driver, from the beginning.
++  */
++
++ #include <linux/module.h>
++ #include <linux/moduleparam.h>
++ #include <linux/init.h>
++
++ #include <linux/sched.h>
++ #include <linux/kernel.h>       /* printk() */
++ #include <linux/slab.h>         /* kmalloc() */
++ #include <linux/fs.h>           /* everything... */
++ #include <linux/errno.h>        /* error codes */
++ #include <linux/timer.h>
++ #include <linux/types.h>        /* size_t */
++ #include <linux/fcntl.h>        /* O_ACCMODE */
++ #include <linux/hdreg.h>        /* HDIO_GETGEO */
++ #include <linux/kdev_t.h>
++ #include <linux/vmalloc.h>
++ #include <linux/genhd.h>
++ #include <linux/blkdev.h>
++ #include <linux/buffer_head.h>  /* invalidate_bdev */
++ #include <linux/bio.h>
++
++ MODULE_LICENSE("Dual BSD/GPL");
++
++ static int sbull_major = 0;
++ module_param(sbull_major, int, 0);
++ static int hardsect_size = 512;
++ module_param(hardsect_size, int, 0);
++ static int nsectors = 1024;     /* How big the drive is */
++ module_param(nsectors, int, 0);
++ static int ndevices = 4;
++ module_param(ndevices, int, 0);
++
++ /*
++  * The different "request modes" we can use.
++  */
++ enum {
++         RM_SIMPLE  = 0, /* The extra-simple request function */
++         RM_FULL    = 1, /* The full-blown version */
++         RM_NOQUEUE = 2, /* Use make_request */
++ };
++ static int request_mode = RM_SIMPLE;
++ module_param(request_mode, int, 0);
++
++ /*
++  * Minor number and partition management.
++  */
++ #define SBULL_MINORS    16
++ #define MINOR_SHIFT     4
++ #define DEVNUM(kdevnum) (MINOR(kdev_t_to_nr(kdevnum)) >> MINOR_SHIFT
++
++ /*
++  * We can tweak our hardware sector size, but the kernel talks to us
++  * in terms of small sectors, always.
++  */
++ #define KERNEL_SECTOR_SIZE      512
++
++ /*
++  * After this much idle time, the driver will simulate a media change.
++  */
++ #define INVALIDATE_DELAY        30*HZ
++
++ /*
++  * The internal representation of our device.
++  */
++ struct sbull_dev {
++         int size;                       /* Device size in sectors */
++         u8 *data;                       /* The data array */
++         short users;                    /* How many users */
++         short media_change;             /* Flag a media change? */
++         spinlock_t lock;                /* For mutual exclusion */
++         struct request_queue *queue;    /* The device request queue */
++         struct gendisk *gd;             /* The gendisk structure */
++         struct timer_list timer;        /* For simulated media changes */
++ };
++
++ static struct sbull_dev *Devices = NULL;
++
++ /*
++  * Handle an I/O request.
++  */
++ static void sbull_transfer(struct sbull_dev *dev, unsigned long sector,
++                 unsigned long nsect, char *buffer, int write)
++ {
++         unsigned long offset = sector*KERNEL_SECTOR_SIZE;
++         unsigned long nbytes = nsect*KERNEL_SECTOR_SIZE;
++
++         if ((offset + nbytes) > dev->size) {
++                 printk (KERN_NOTICE "Beyond-end write (%ld %ld)\n", offset, nbytes);
++                 return;
++         }
++         if (write)
++                 memcpy(dev->data + offset, buffer, nbytes);
++         else
++                 memcpy(buffer, dev->data + offset, nbytes);
++ }
++
++ /*
++  * The simple form of the request function.
++  */
++ static void sbull_request(struct request_queue *q)
++ {
++         struct request *req;
++
++         while ((req = elv_next_request(q)) != NULL) {
++                 struct sbull_dev *dev = req->rq_disk->private_data;
++                 if (! blk_fs_request(req)) {
++                         printk (KERN_NOTICE "Skip non-fs request\n");
++                         blk_end_request(req, -EIO, req->current_nr_sectors << 9);
++                         continue;
++                 }
++     //          printk (KERN_NOTICE "Req dev %d dir %ld sec %ld, nr %d f %lx\n",
++     //                          dev - Devices, rq_data_dir(req),
++     //                          req->sector, req->current_nr_sectors,
++     //                          req->flags);
++                 sbull_transfer(dev, req->sector, req->current_nr_sectors,
++                                 req->buffer, rq_data_dir(req));
++                 blk_end_request(req, 1, req->current_nr_sectors << 9);
++         }
++ }
++
++
++ /*
++  * Transfer a single BIO.
++  */
++ static int sbull_xfer_bio(struct sbull_dev *dev, struct bio *bio)
++ {
++         int i;
++         struct bio_vec *bvec;
++         sector_t sector = bio->bi_sector;
++
++         /* Do each segment independently. */
++         bio_for_each_segment(bvec, bio, i) {
++                 char *buffer = __bio_kmap_atomic(bio, i, KM_USER0);
++                 sbull_transfer(dev, sector, bio_cur_sectors(bio),
++                                 buffer, bio_data_dir(bio) == WRITE);
++                 sector += bio_cur_sectors(bio);
++                 __bio_kunmap_atomic(bio, KM_USER0);
++         }
++         return 0; /* Always "succeed" */
++ }
++
++ /*
++  * Transfer a full request.
++  */
++ static int sbull_xfer_request(struct sbull_dev *dev, struct request *req)
++ {
++
++         struct req_iterator iter;
++         int nsect = 0;
++         struct bio_vec *bvec;
++
++         /* Macro rq_for_each_bio is gone.
++          * In most cases one should use rq_for_each_segment.
++          */
++         rq_for_each_segment(bvec, req, iter) {
++                 char *buffer = __bio_kmap_atomic(iter.bio, iter.i, KM_USER0);
++                 sector_t sector = iter.bio->bi_sector;
++                 sbull_transfer(dev, sector, bio_cur_sectors(iter.bio),
++                                buffer, bio_data_dir(iter.bio) == WRITE);
++                 sector += bio_cur_sectors(iter.bio);
++                 __bio_kunmap_atomic(iter.bio, KM_USER0);
++                 nsect += iter.bio->bi_size/KERNEL_SECTOR_SIZE;
++         }
++         return nsect;
++ }
++
++
++ /*
++  * Smarter request function that "handles clustering".
++  */
++ static void sbull_full_request(struct request_queue *q)
++ {
++         struct request *req;
++         int sectors_xferred;
++         struct sbull_dev *dev = q->queuedata;
++
++         while ((req = elv_next_request(q)) != NULL) {
++                 if (! blk_fs_request(req)) {
++                         printk (KERN_NOTICE "Skip non-fs request\n");
++                         end_request(req, 0);
++                         continue;
++                 }
++                 sectors_xferred = sbull_xfer_request(dev, req);
++                 __blk_end_request (req, 1, sectors_xferred << 9);
++                 /* The above includes a call to add_disk_randomness(). */
++         }
++ }
++
++ /*
++  * The direct make request version.
++  */
++    static int sbull_make_request(struct request_queue *q, struct bio *bio)
++ {
++         struct sbull_dev *dev = q->queuedata;
++         int status;
++
++         status = sbull_xfer_bio(dev, bio);
++         bio_endio(bio, status);
++         return 0;
++ }
++
++
++ /*
++  * Open and close.
++  */
++
++ static int sbull_open(struct inode *inode, struct file *filp)
++ {
++         struct sbull_dev *dev = inode->i_bdev->bd_disk->private_data;
++
++         del_timer_sync(&dev->timer);
++         filp->private_data = dev;
++         spin_lock(&dev->lock);
++         if (! dev->users)
++                 check_disk_change(inode->i_bdev);
++         dev->users++;
++         spin_unlock(&dev->lock);
++         return 0;
++ }
++
++ static int sbull_release(struct inode *inode, struct file *filp)
++ {
++         struct sbull_dev *dev = inode->i_bdev->bd_disk->private_data;
++
++         spin_lock(&dev->lock);
++         dev->users--;
++
++         if (!dev->users) {
++                 dev->timer.expires = jiffies + INVALIDATE_DELAY;
++                 add_timer(&dev->timer);
++         }
++         spin_unlock(&dev->lock);
++
++         return 0;
++ }
++
++ /*
++  * Look for a (simulated) media change.
++  */
++ int sbull_media_changed(struct gendisk *gd)
++ {
++         struct sbull_dev *dev = gd->private_data;
++
++         return dev->media_change;
++ }
++
++ /*
++  * Revalidate.  WE DO NOT TAKE THE LOCK HERE, for fear of deadlocking
++  * with open.  That needs to be reevaluated.
++  */
++ int sbull_revalidate(struct gendisk *gd)
++ {
++         struct sbull_dev *dev = gd->private_data;
++
++         if (dev->media_change) {
++                 dev->media_change = 0;
++                 memset (dev->data, 0, dev->size);
++         }
++         return 0;
++ }
++
++ /*
++  * The "invalidate" function runs out of the device timer; it sets
++  * a flag to simulate the removal of the media.
++  */
++ void sbull_invalidate(unsigned long ldev)
++ {
++         struct sbull_dev *dev = (struct sbull_dev *) ldev;
++
++         spin_lock(&dev->lock);
++         if (dev->users || !dev->data)
++                 printk (KERN_WARNING "sbull: timer sanity check failed\n");
++         else
++                 dev->media_change = 1;
++         spin_unlock(&dev->lock);
++ }
++
++ /*
++  * The ioctl() implementation
++  */
++
++ int sbull_ioctl (struct inode *inode, struct file *filp,
++                  unsigned int cmd, unsigned long arg)
++ {
++         long size;
++         struct hd_geometry geo;
++         struct sbull_dev *dev = filp->private_data;
++
++         switch(cmd) {
++             case HDIO_GETGEO:
++                 /*
++                  * Get geometry: since we are a virtual device, we have to make
++                  * up something plausible.  So we claim 16 sectors, four heads,
++                  * and calculate the corresponding number of cylinders.  We set the
++                  * start of data at sector four.
++                  */
++                 size = dev->size*(hardsect_size/KERNEL_SECTOR_SIZE);
++                 geo.cylinders = (size & ~0x3f) >> 6;
++                 geo.heads = 4;
++                 geo.sectors = 16;
++                 geo.start = 4;
++                 if (copy_to_user((void __user *) arg, &geo, sizeof(geo)))
++                         return -EFAULT;
++                 return 0;
++         }
++
++         return -ENOTTY; /* unknown command */
++ }
++
++
++
++ /*
++  * The device operations structure.
++  */
++ static struct block_device_operations sbull_ops = {
++         .owner           = THIS_MODULE,
++         .open            = sbull_open,
++         .release         = sbull_release,
++         .media_changed   = sbull_media_changed,
++         .revalidate_disk = sbull_revalidate,
++         .ioctl           = sbull_ioctl
++ };
++
++
++ /*
++  * Set up our internal device.
++  */
++ static void setup_device(struct sbull_dev *dev, int which)
++ {
++         /*
++          * Get some memory.
++          */
++         memset (dev, 0, sizeof (struct sbull_dev));
++         dev->size = nsectors*hardsect_size;
++         dev->data = vmalloc(dev->size);
++         if (dev->data == NULL) {
++                 printk (KERN_NOTICE "vmalloc failure.\n");
++                 return;
++         }
++         spin_lock_init(&dev->lock);
++
++         /*
++          * The timer which "invalidates" the device.
++          */
++         init_timer(&dev->timer);
++         dev->timer.data = (unsigned long) dev;
++         dev->timer.function = sbull_invalidate;
++
++         /*
++          * The I/O queue, depending on whether we are using our own
++          * make_request function or not.
++          */
++         switch (request_mode) {
++             case RM_NOQUEUE:
++                 dev->queue = blk_alloc_queue(GFP_KERNEL);
++                 if (dev->queue == NULL)
++                         goto out_vfree;
++                 blk_queue_make_request(dev->queue, sbull_make_request);
++                 break;
++
++             case RM_FULL:
++                 dev->queue = blk_init_queue(sbull_full_request, &dev->lock);
++                 if (dev->queue == NULL)
++                         goto out_vfree;
++                 break;
++
++             default:
++                 printk(KERN_NOTICE "Bad request mode %d, using simple\n", request_mode);
++                 /* fall into.. */
++
++             case RM_SIMPLE:
++                 dev->queue = blk_init_queue(sbull_request, &dev->lock);
++                 if (dev->queue == NULL)
++                         goto out_vfree;
++                 break;
++         }
++         blk_queue_hardsect_size(dev->queue, hardsect_size);
++         dev->queue->queuedata = dev;
++         /*
++          * And the gendisk structure.
++          */
++         dev->gd = alloc_disk(SBULL_MINORS);
++         if (! dev->gd) {
++                 printk (KERN_NOTICE "alloc_disk failure\n");
++                 goto out_vfree;
++         }
++         dev->gd->major = sbull_major;
++         dev->gd->first_minor = which*SBULL_MINORS;
++         dev->gd->fops = &sbull_ops;
++         dev->gd->queue = dev->queue;
++         dev->gd->private_data = dev;
++         snprintf (dev->gd->disk_name, 32, "sbull%c", which + 'a');
++         set_capacity(dev->gd, nsectors*(hardsect_size/KERNEL_SECTOR_SIZE));
++         add_disk(dev->gd);
++         return;
++
++   out_vfree:
++         if (dev->data)
++                 vfree(dev->data);
++ }
++
++
++
++ static int __init sbull_init(void)
++ {
++         int i;
++         /*
++          * Get registered.
++          */
++         sbull_major = register_blkdev(sbull_major, "sbull");
++         if (sbull_major <= 0) {
++                 printk(KERN_WARNING "sbull: unable to get major number\n");
++                 return -EBUSY;
++         }
++         /*
++          * Allocate the device array, and initialize each one.
++          */
++         Devices = kmalloc(ndevices*sizeof (struct sbull_dev), GFP_KERNEL);
++         if (Devices == NULL)
++                 goto out_unregister;
++         for (i = 0; i < ndevices; i++)
++                 setup_device(Devices + i, i);
++
++         return 0;
++
++   out_unregister:
++         unregister_blkdev(sbull_major, "sbd");
++         return -ENOMEM;
++ }
++
++ static void sbull_exit(void)
++ {
++         int i;
++
++         for (i = 0; i < ndevices; i++) {
++                 struct sbull_dev *dev = Devices + i;
++
++                 del_timer_sync(&dev->timer);
++                 if (dev->gd) {
++                         del_gendisk(dev->gd);
++                         put_disk(dev->gd);
++                 }
++                 if (dev->queue) {
++                         if (request_mode == RM_NOQUEUE)
++                                 kobject_put (&dev->queue->kobj);
++                                 /* blk_put_queue() is no longer an exported symbol */
++                         else
++                                 blk_cleanup_queue(dev->queue);
++                 }
++                 if (dev->data)
++                         vfree(dev->data);
++         }
++         unregister_blkdev(sbull_major, "sbull");
++         kfree(Devices);
++ }
++
++ module_init(sbull_init);
++ module_exit(sbull_exit);
+-- 
+1.7.4.4
+
+
+From 1a61deb1b60e31e0cd284213509260df450ae790 Mon Sep 17 00:00:00 2001
+From: admirej <admirej@onid.orst.edu>
+Date: Thu, 2 Jun 2011 19:08:35 -0700
+Subject: [PATCH 03/14] Made changes to osurd.c to try to get it up to date.
+
+---
+ linux-2.6.34.7/drivers/block/osurd.c |  135 ++++++++++++++++++----------------
+ 1 files changed, 72 insertions(+), 63 deletions(-)
+
+diff --git a/linux-2.6.34.7/drivers/block/osurd.c b/linux-2.6.34.7/drivers/block/osurd.c
+index 6d2b30f..2bf0867 100644
+--- a/linux-2.6.34.7/drivers/block/osurd.c
++++ b/linux-2.6.34.7/drivers/block/osurd.c
+@@ -41,8 +41,8 @@
+ 
+  MODULE_LICENSE("Dual BSD/GPL");
+ 
+- static int sbull_major = 0;
+- module_param(sbull_major, int, 0);
++ static int osurd_major = 0;
++ module_param(osurd_major, int, 0);
+  static int hardsect_size = 512;
+  module_param(hardsect_size, int, 0);
+  static int nsectors = 1024;     /* How big the drive is */
+@@ -64,7 +64,7 @@
+  /*
+   * Minor number and partition management.
+   */
+- #define SBULL_MINORS    16
++ #define OSURD_MINORS    16
+  #define MINOR_SHIFT     4
+  #define DEVNUM(kdevnum) (MINOR(kdev_t_to_nr(kdevnum)) >> MINOR_SHIFT
+ 
+@@ -82,7 +82,7 @@
+  /*
+   * The internal representation of our device.
+   */
+- struct sbull_dev {
++ struct osurd_dev {
+          int size;                       /* Device size in sectors */
+          u8 *data;                       /* The data array */
+          short users;                    /* How many users */
+@@ -93,12 +93,12 @@
+          struct timer_list timer;        /* For simulated media changes */
+  };
+ 
+- static struct sbull_dev *Devices = NULL;
++ static struct osurd_dev *Devices = NULL;
+ 
+  /*
+   * Handle an I/O request.
+   */
+- static void sbull_transfer(struct sbull_dev *dev, unsigned long sector,
++ static void osurd_transfer(struct osurd_dev *dev, sector_t sector,
+                  unsigned long nsect, char *buffer, int write)
+  {
+          unsigned long offset = sector*KERNEL_SECTOR_SIZE;
+@@ -117,24 +117,24 @@
+  /*
+   * The simple form of the request function.
+   */
+- static void sbull_request(struct request_queue *q)
++ static void osurd_request(struct request_queue *q)
+  {
+          struct request *req;
+ 
+          while ((req = elv_next_request(q)) != NULL) {
+-                 struct sbull_dev *dev = req->rq_disk->private_data;
++                 struct osurd_dev *dev = req->rq_disk->private_data;
+                  if (! blk_fs_request(req)) {
+                          printk (KERN_NOTICE "Skip non-fs request\n");
+-                         blk_end_request(req, -EIO, req->current_nr_sectors << 9);
++                         blk_end_request(req, -EIO, blk_rq_cur_sectors(req));
+                          continue;
+                  }
+      //          printk (KERN_NOTICE "Req dev %d dir %ld sec %ld, nr %d f %lx\n",
+      //                          dev - Devices, rq_data_dir(req),
+      //                          req->sector, req->current_nr_sectors,
+      //                          req->flags);
+-                 sbull_transfer(dev, req->sector, req->current_nr_sectors,
++                 osurd_transfer(dev, blk_rq_pos(req), blk_rq_cur_sectors(req),
+                                  req->buffer, rq_data_dir(req));
+-                 blk_end_request(req, 1, req->current_nr_sectors << 9);
++                 blk_end_request(req, 1, blk_rq_cur_sectors(req));
+          }
+  }
+ 
+@@ -142,7 +142,7 @@
+  /*
+   * Transfer a single BIO.
+   */
+- static int sbull_xfer_bio(struct sbull_dev *dev, struct bio *bio)
++ static int osurd_xfer_bio(struct osurd_dev *dev, struct bio *bio)
+  {
+          int i;
+          struct bio_vec *bvec;
+@@ -151,7 +151,7 @@
+          /* Do each segment independently. */
+          bio_for_each_segment(bvec, bio, i) {
+                  char *buffer = __bio_kmap_atomic(bio, i, KM_USER0);
+-                 sbull_transfer(dev, sector, bio_cur_sectors(bio),
++                 osurd_transfer(dev, sector, bio_cur_sectors(bio),
+                                  buffer, bio_data_dir(bio) == WRITE);
+                  sector += bio_cur_sectors(bio);
+                  __bio_kunmap_atomic(bio, KM_USER0);
+@@ -162,7 +162,7 @@
+  /*
+   * Transfer a full request.
+   */
+- static int sbull_xfer_request(struct sbull_dev *dev, struct request *req)
++ static int osurd_xfer_request(struct osurd_dev *dev, struct request *req)
+  {
+ 
+          struct req_iterator iter;
+@@ -175,7 +175,7 @@
+          rq_for_each_segment(bvec, req, iter) {
+                  char *buffer = __bio_kmap_atomic(iter.bio, iter.i, KM_USER0);
+                  sector_t sector = iter.bio->bi_sector;
+-                 sbull_transfer(dev, sector, bio_cur_sectors(iter.bio),
++                 osurd_transfer(dev, sector, bio_cur_sectors(iter.bio),
+                                 buffer, bio_data_dir(iter.bio) == WRITE);
+                  sector += bio_cur_sectors(iter.bio);
+                  __bio_kunmap_atomic(iter.bio, KM_USER0);
+@@ -188,11 +188,11 @@
+  /*
+   * Smarter request function that "handles clustering".
+   */
+- static void sbull_full_request(struct request_queue *q)
++ static void osurd_full_request(struct request_queue *q)
+  {
+          struct request *req;
+          int sectors_xferred;
+-         struct sbull_dev *dev = q->queuedata;
++         struct osurd_dev *dev = q->queuedata;
+ 
+          while ((req = elv_next_request(q)) != NULL) {
+                  if (! blk_fs_request(req)) {
+@@ -200,7 +200,7 @@
+                          end_request(req, 0);
+                          continue;
+                  }
+-                 sectors_xferred = sbull_xfer_request(dev, req);
++                 sectors_xferred = osurd_xfer_request(dev, req);
+                  __blk_end_request (req, 1, sectors_xferred << 9);
+                  /* The above includes a call to add_disk_randomness(). */
+          }
+@@ -209,12 +209,12 @@
+  /*
+   * The direct make request version.
+   */
+-    static int sbull_make_request(struct request_queue *q, struct bio *bio)
++    static int osurd_make_request(struct request_queue *q, struct bio *bio)
+  {
+-         struct sbull_dev *dev = q->queuedata;
++         struct osurd_dev *dev = q->queuedata;
+          int status;
+ 
+-         status = sbull_xfer_bio(dev, bio);
++         status = osurd_xfer_bio(dev, bio);
+          bio_endio(bio, status);
+          return 0;
+  }
+@@ -224,10 +224,8 @@
+   * Open and close.
+   */
+ 
+- static int sbull_open(struct inode *inode, struct file *filp)
++ static int osurd_open(struct osurd_dev *dev, fmode_t mode)
+  {
+-         struct sbull_dev *dev = inode->i_bdev->bd_disk->private_data;
+-
+          del_timer_sync(&dev->timer);
+          filp->private_data = dev;
+          spin_lock(&dev->lock);
+@@ -238,9 +236,9 @@
+          return 0;
+  }
+ 
+- static int sbull_release(struct inode *inode, struct file *filp)
++ static int osurd_release(struct gendisk *gd, struct fmode_t mode)
+  {
+-         struct sbull_dev *dev = inode->i_bdev->bd_disk->private_data;
++         struct osurd_dev *dev = gd->private_data;
+ 
+          spin_lock(&dev->lock);
+          dev->users--;
+@@ -257,9 +255,9 @@
+  /*
+   * Look for a (simulated) media change.
+   */
+- int sbull_media_changed(struct gendisk *gd)
++ int osurd_media_changed(struct gendisk *gd)
+  {
+-         struct sbull_dev *dev = gd->private_data;
++         struct osurd_dev *dev = gd->private_data;
+ 
+          return dev->media_change;
+  }
+@@ -268,9 +266,9 @@
+   * Revalidate.  WE DO NOT TAKE THE LOCK HERE, for fear of deadlocking
+   * with open.  That needs to be reevaluated.
+   */
+- int sbull_revalidate(struct gendisk *gd)
++ int osurd_revalidate(struct gendisk *gd)
+  {
+-         struct sbull_dev *dev = gd->private_data;
++         struct osurd_dev *dev = gd->private_data;
+ 
+          if (dev->media_change) {
+                  dev->media_change = 0;
+@@ -283,13 +281,13 @@
+   * The "invalidate" function runs out of the device timer; it sets
+   * a flag to simulate the removal of the media.
+   */
+- void sbull_invalidate(unsigned long ldev)
++ void osurd_invalidate(unsigned long ldev)
+  {
+-         struct sbull_dev *dev = (struct sbull_dev *) ldev;
++         struct osurd_dev *dev = (struct osurd_dev *) ldev;
+ 
+          spin_lock(&dev->lock);
+          if (dev->users || !dev->data)
+-                 printk (KERN_WARNING "sbull: timer sanity check failed\n");
++                 printk (KERN_WARNING "osurd: timer sanity check failed\n");
+          else
+                  dev->media_change = 1;
+          spin_unlock(&dev->lock);
+@@ -299,12 +297,11 @@
+   * The ioctl() implementation
+   */
+ 
+- int sbull_ioctl (struct inode *inode, struct file *filp,
++ int osurd_ioctl (struct osurd_dev *dev, fmode_t mode,
+                   unsigned int cmd, unsigned long arg)
+  {
+          long size;
+          struct hd_geometry geo;
+-         struct sbull_dev *dev = filp->private_data;
+ 
+          switch(cmd) {
+              case HDIO_GETGEO:
+@@ -327,30 +324,42 @@
+          return -ENOTTY; /* unknown command */
+  }
+ 
++int osurd_getgeo(struct osurd_device * dev, struct hd_geometry * geo) {
++	long size;
++
++	/* We have no real geometry, of course, so make something up. */
++	size = dev->size*(hardsect_size/KERNEL_SECTOR_SIZE);
++	geo->cylinders = (size & ~0x3f) >> 6;
++	geo->heads = 4;
++	geo->sectors = 16;
++	geo->start = 4;
++	return 0;
++}
+ 
+ 
+  /*
+   * The device operations structure.
+   */
+- static struct block_device_operations sbull_ops = {
++ static struct block_device_operations osurd_ops = {
+          .owner           = THIS_MODULE,
+-         .open            = sbull_open,
+-         .release         = sbull_release,
+-         .media_changed   = sbull_media_changed,
+-         .revalidate_disk = sbull_revalidate,
+-         .ioctl           = sbull_ioctl
++         .open            = osurd_open,
++         .release         = osurd_release,
++         .media_changed   = osurd_media_changed,
++         .revalidate_disk = osurd_revalidate,
++         .ioctl           = osurd_ioctl
++         .getgeo          = osurd_getgeo
+  };
+ 
+ 
+  /*
+   * Set up our internal device.
+   */
+- static void setup_device(struct sbull_dev *dev, int which)
++ static void setup_device(struct osurd_dev *dev, int which)
+  {
+          /*
+           * Get some memory.
+           */
+-         memset (dev, 0, sizeof (struct sbull_dev));
++         memset (dev, 0, sizeof (struct osurd_dev));
+          dev->size = nsectors*hardsect_size;
+          dev->data = vmalloc(dev->size);
+          if (dev->data == NULL) {
+@@ -364,7 +373,7 @@
+           */
+          init_timer(&dev->timer);
+          dev->timer.data = (unsigned long) dev;
+-         dev->timer.function = sbull_invalidate;
++         dev->timer.function = osurd_invalidate;
+ 
+          /*
+           * The I/O queue, depending on whether we are using our own
+@@ -375,11 +384,11 @@
+                  dev->queue = blk_alloc_queue(GFP_KERNEL);
+                  if (dev->queue == NULL)
+                          goto out_vfree;
+-                 blk_queue_make_request(dev->queue, sbull_make_request);
++                 blk_queue_make_request(dev->queue, osurd_make_request);
+                  break;
+ 
+              case RM_FULL:
+-                 dev->queue = blk_init_queue(sbull_full_request, &dev->lock);
++                 dev->queue = blk_init_queue(osurd_full_request, &dev->lock);
+                  if (dev->queue == NULL)
+                          goto out_vfree;
+                  break;
+@@ -389,7 +398,7 @@
+                  /* fall into.. */
+ 
+              case RM_SIMPLE:
+-                 dev->queue = blk_init_queue(sbull_request, &dev->lock);
++                 dev->queue = blk_init_queue(osurd_request, &dev->lock);
+                  if (dev->queue == NULL)
+                          goto out_vfree;
+                  break;
+@@ -399,17 +408,17 @@
+          /*
+           * And the gendisk structure.
+           */
+-         dev->gd = alloc_disk(SBULL_MINORS);
++         dev->gd = alloc_disk(OSURD_MINORS);
+          if (! dev->gd) {
+                  printk (KERN_NOTICE "alloc_disk failure\n");
+                  goto out_vfree;
+          }
+-         dev->gd->major = sbull_major;
+-         dev->gd->first_minor = which*SBULL_MINORS;
+-         dev->gd->fops = &sbull_ops;
++         dev->gd->major = osurd_major;
++         dev->gd->first_minor = which*OSURD_MINORS;
++         dev->gd->fops = &osurd_ops;
+          dev->gd->queue = dev->queue;
+          dev->gd->private_data = dev;
+-         snprintf (dev->gd->disk_name, 32, "sbull%c", which + 'a');
++         snprintf (dev->gd->disk_name, 32, "osurd%c", which + 'a');
+          set_capacity(dev->gd, nsectors*(hardsect_size/KERNEL_SECTOR_SIZE));
+          add_disk(dev->gd);
+          return;
+@@ -421,21 +430,21 @@
+ 
+ 
+ 
+- static int __init sbull_init(void)
++ static int __init osurd_init(void)
+  {
+          int i;
+          /*
+           * Get registered.
+           */
+-         sbull_major = register_blkdev(sbull_major, "sbull");
+-         if (sbull_major <= 0) {
+-                 printk(KERN_WARNING "sbull: unable to get major number\n");
++         osurd_major = register_blkdev(osurd_major, "osurd");
++         if (osurd_major <= 0) {
++                 printk(KERN_WARNING "osurd: unable to get major number\n");
+                  return -EBUSY;
+          }
+          /*
+           * Allocate the device array, and initialize each one.
+           */
+-         Devices = kmalloc(ndevices*sizeof (struct sbull_dev), GFP_KERNEL);
++         Devices = kmalloc(ndevices*sizeof (struct osurd_dev), GFP_KERNEL);
+          if (Devices == NULL)
+                  goto out_unregister;
+          for (i = 0; i < ndevices; i++)
+@@ -444,16 +453,16 @@
+          return 0;
+ 
+    out_unregister:
+-         unregister_blkdev(sbull_major, "sbd");
++         unregister_blkdev(osurd_major, "osurd");
+          return -ENOMEM;
+  }
+ 
+- static void sbull_exit(void)
++ static void osurd_exit(void)
+  {
+          int i;
+ 
+          for (i = 0; i < ndevices; i++) {
+-                 struct sbull_dev *dev = Devices + i;
++                 struct osurd_dev *dev = Devices + i;
+ 
+                  del_timer_sync(&dev->timer);
+                  if (dev->gd) {
+@@ -470,9 +479,9 @@
+                  if (dev->data)
+                          vfree(dev->data);
+          }
+-         unregister_blkdev(sbull_major, "sbull");
++         unregister_blkdev(osurd_major, "osurd");
+          kfree(Devices);
+  }
+ 
+- module_init(sbull_init);
+- module_exit(sbull_exit);
++ module_init(osurd_init);
++ module_exit(osurd_exit);
+-- 
+1.7.4.4
+
+
+From c2d221b5d18ce2291e1969255583bf5e42695b80 Mon Sep 17 00:00:00 2001
+From: admirej <admirej@onid.orst.edu>
+Date: Thu, 2 Jun 2011 20:56:38 -0700
+Subject: [PATCH 04/14] Fixed some compiling errors on the basic osurd.
+
+---
+ linux-2.6.34.7/drivers/block/osurd.c |  144 +++++----------------------------
+ 1 files changed, 22 insertions(+), 122 deletions(-)
+
+diff --git a/linux-2.6.34.7/drivers/block/osurd.c b/linux-2.6.34.7/drivers/block/osurd.c
+index 2bf0867..8c372e9 100644
+--- a/linux-2.6.34.7/drivers/block/osurd.c
++++ b/linux-2.6.34.7/drivers/block/osurd.c
+@@ -6,6 +6,13 @@
+   * from http://www.cs.fsu.edu/~baker/devices/lxr/http/source/ldd-examples/sbull/sbull.c
+   */
+ 
++  /* Working on getting the code to compile.  I removed the request modes and a
++   * a lot of the extra request functions because they are unneccessary and harder
++   * to write in the newer version of the kernel. Someone could add in the module
++   * params and add checks to the setup function. Someone else might start adding
++   * in printk stmts.
++   */
++
+   /* This version still has a lot changes that need to be made to it.  We would have to
+    * change the request stuff and the inode stuff.  The link at the end should help.
+    * It also has a lot of extra code that we would have to go through and probably
+@@ -50,16 +57,6 @@
+  static int ndevices = 4;
+  module_param(ndevices, int, 0);
+ 
+- /*
+-  * The different "request modes" we can use.
+-  */
+- enum {
+-         RM_SIMPLE  = 0, /* The extra-simple request function */
+-         RM_FULL    = 1, /* The full-blown version */
+-         RM_NOQUEUE = 2, /* Use make_request */
+- };
+- static int request_mode = RM_SIMPLE;
+- module_param(request_mode, int, 0);
+ 
+  /*
+   * Minor number and partition management.
+@@ -121,7 +118,7 @@
+  {
+          struct request *req;
+ 
+-         while ((req = elv_next_request(q)) != NULL) {
++         while ((req = blk_fetch_request(q)) != NULL) {
+                  struct osurd_dev *dev = req->rq_disk->private_data;
+                  if (! blk_fs_request(req)) {
+                          printk (KERN_NOTICE "Skip non-fs request\n");
+@@ -138,88 +135,6 @@
+          }
+  }
+ 
+-
+- /*
+-  * Transfer a single BIO.
+-  */
+- static int osurd_xfer_bio(struct osurd_dev *dev, struct bio *bio)
+- {
+-         int i;
+-         struct bio_vec *bvec;
+-         sector_t sector = bio->bi_sector;
+-
+-         /* Do each segment independently. */
+-         bio_for_each_segment(bvec, bio, i) {
+-                 char *buffer = __bio_kmap_atomic(bio, i, KM_USER0);
+-                 osurd_transfer(dev, sector, bio_cur_sectors(bio),
+-                                 buffer, bio_data_dir(bio) == WRITE);
+-                 sector += bio_cur_sectors(bio);
+-                 __bio_kunmap_atomic(bio, KM_USER0);
+-         }
+-         return 0; /* Always "succeed" */
+- }
+-
+- /*
+-  * Transfer a full request.
+-  */
+- static int osurd_xfer_request(struct osurd_dev *dev, struct request *req)
+- {
+-
+-         struct req_iterator iter;
+-         int nsect = 0;
+-         struct bio_vec *bvec;
+-
+-         /* Macro rq_for_each_bio is gone.
+-          * In most cases one should use rq_for_each_segment.
+-          */
+-         rq_for_each_segment(bvec, req, iter) {
+-                 char *buffer = __bio_kmap_atomic(iter.bio, iter.i, KM_USER0);
+-                 sector_t sector = iter.bio->bi_sector;
+-                 osurd_transfer(dev, sector, bio_cur_sectors(iter.bio),
+-                                buffer, bio_data_dir(iter.bio) == WRITE);
+-                 sector += bio_cur_sectors(iter.bio);
+-                 __bio_kunmap_atomic(iter.bio, KM_USER0);
+-                 nsect += iter.bio->bi_size/KERNEL_SECTOR_SIZE;
+-         }
+-         return nsect;
+- }
+-
+-
+- /*
+-  * Smarter request function that "handles clustering".
+-  */
+- static void osurd_full_request(struct request_queue *q)
+- {
+-         struct request *req;
+-         int sectors_xferred;
+-         struct osurd_dev *dev = q->queuedata;
+-
+-         while ((req = elv_next_request(q)) != NULL) {
+-                 if (! blk_fs_request(req)) {
+-                         printk (KERN_NOTICE "Skip non-fs request\n");
+-                         end_request(req, 0);
+-                         continue;
+-                 }
+-                 sectors_xferred = osurd_xfer_request(dev, req);
+-                 __blk_end_request (req, 1, sectors_xferred << 9);
+-                 /* The above includes a call to add_disk_randomness(). */
+-         }
+- }
+-
+- /*
+-  * The direct make request version.
+-  */
+-    static int osurd_make_request(struct request_queue *q, struct bio *bio)
+- {
+-         struct osurd_dev *dev = q->queuedata;
+-         int status;
+-
+-         status = osurd_xfer_bio(dev, bio);
+-         bio_endio(bio, status);
+-         return 0;
+- }
+-
+-
+  /*
+   * Open and close.
+   */
+@@ -227,16 +142,15 @@
+  static int osurd_open(struct osurd_dev *dev, fmode_t mode)
+  {
+          del_timer_sync(&dev->timer);
+-         filp->private_data = dev;
+          spin_lock(&dev->lock);
+          if (! dev->users)
+-                 check_disk_change(inode->i_bdev);
++                 check_disk_change(dev);
+          dev->users++;
+          spin_unlock(&dev->lock);
+          return 0;
+  }
+ 
+- static int osurd_release(struct gendisk *gd, struct fmode_t mode)
++ static int osurd_release(struct gendisk *gd, fmode_t mode)
+  {
+          struct osurd_dev *dev = gd->private_data;
+ 
+@@ -324,7 +238,7 @@
+          return -ENOTTY; /* unknown command */
+  }
+ 
+-int osurd_getgeo(struct osurd_device * dev, struct hd_geometry * geo) {
++int osurd_getgeo(struct osurd_dev * dev, struct hd_geometry * geo) {
+ 	long size;
+ 
+ 	/* We have no real geometry, of course, so make something up. */
+@@ -356,6 +270,12 @@ int osurd_getgeo(struct osurd_device * dev, struct hd_geometry * geo) {
+   */
+  static void setup_device(struct osurd_dev *dev, int which)
+  {
++         /* Check params?
++          * Hardsect % 512 should be zero and > 512
++          * Disksize % 512 should be zero?
++          * Disksize % Hardsect should be zero (to get right number of sectors)
++          */
++
+          /*
+           * Get some memory.
+           */
+@@ -379,31 +299,11 @@ int osurd_getgeo(struct osurd_device * dev, struct hd_geometry * geo) {
+           * The I/O queue, depending on whether we are using our own
+           * make_request function or not.
+           */
+-         switch (request_mode) {
+-             case RM_NOQUEUE:
+-                 dev->queue = blk_alloc_queue(GFP_KERNEL);
+-                 if (dev->queue == NULL)
+-                         goto out_vfree;
+-                 blk_queue_make_request(dev->queue, osurd_make_request);
+-                 break;
+-
+-             case RM_FULL:
+-                 dev->queue = blk_init_queue(osurd_full_request, &dev->lock);
+-                 if (dev->queue == NULL)
+-                         goto out_vfree;
+-                 break;
+-
+-             default:
+-                 printk(KERN_NOTICE "Bad request mode %d, using simple\n", request_mode);
+-                 /* fall into.. */
+-
+-             case RM_SIMPLE:
+-                 dev->queue = blk_init_queue(osurd_request, &dev->lock);
+-                 if (dev->queue == NULL)
+-                         goto out_vfree;
+-                 break;
+-         }
+-         blk_queue_hardsect_size(dev->queue, hardsect_size);
++
++         dev->queue = blk_init_queue(osurd_request, &dev->lock);
++         if (dev->queue == NULL)
++         goto out_vfree;
++         blk_queue_logical_block_size(dev->queue, hardsect_size);
+          dev->queue->queuedata = dev;
+          /*
+           * And the gendisk structure.
+-- 
+1.7.4.4
+
+
+From 2006b4446b53ed1c17ab6154daeb503d2eb5c822 Mon Sep 17 00:00:00 2001
+From: admirej <admirej@onid.orst.edu>
+Date: Thu, 2 Jun 2011 21:23:55 -0700
+Subject: [PATCH 05/14] Fixed some more compile errors.
+
+---
+ linux-2.6.34.7/drivers/block/osurd.c |   17 ++++++++---------
+ 1 files changed, 8 insertions(+), 9 deletions(-)
+
+diff --git a/linux-2.6.34.7/drivers/block/osurd.c b/linux-2.6.34.7/drivers/block/osurd.c
+index 8c372e9..b0e6128 100644
+--- a/linux-2.6.34.7/drivers/block/osurd.c
++++ b/linux-2.6.34.7/drivers/block/osurd.c
+@@ -139,12 +139,13 @@
+   * Open and close.
+   */
+ 
+- static int osurd_open(struct osurd_dev *dev, fmode_t mode)
++ static int osurd_open(struct block_device *bdev, fmode_t mode)
+  {
++         struct osurd_dev dev = bdev->bd_disk->private_data;
+          del_timer_sync(&dev->timer);
+          spin_lock(&dev->lock);
+          if (! dev->users)
+-                 check_disk_change(dev);
++                 check_disk_change(bdev);
+          dev->users++;
+          spin_unlock(&dev->lock);
+          return 0;
+@@ -211,11 +212,12 @@
+   * The ioctl() implementation
+   */
+ 
+- int osurd_ioctl (struct osurd_dev *dev, fmode_t mode,
++ int osurd_ioctl (struct block_device *bdev, fmode_t mode,
+                   unsigned int cmd, unsigned long arg)
+  {
+          long size;
+          struct hd_geometry geo;
++         struct osurd_dev dev = bdev->bd_disk->private_data;
+ 
+          switch(cmd) {
+              case HDIO_GETGEO:
+@@ -238,8 +240,9 @@
+          return -ENOTTY; /* unknown command */
+  }
+ 
+-int osurd_getgeo(struct osurd_dev * dev, struct hd_geometry * geo) {
++int osurd_getgeo(struct block_device * bdev, struct hd_geometry * geo) {
+ 	long size;
++	struct osurd_dev dev = bdev->bd_disk->private_data;
+ 
+ 	/* We have no real geometry, of course, so make something up. */
+ 	size = dev->size*(hardsect_size/KERNEL_SECTOR_SIZE);
+@@ -370,11 +373,7 @@ int osurd_getgeo(struct osurd_dev * dev, struct hd_geometry * geo) {
+                          put_disk(dev->gd);
+                  }
+                  if (dev->queue) {
+-                         if (request_mode == RM_NOQUEUE)
+-                                 kobject_put (&dev->queue->kobj);
+-                                 /* blk_put_queue() is no longer an exported symbol */
+-                         else
+-                                 blk_cleanup_queue(dev->queue);
++                         blk_cleanup_queue(dev->queue);
+                  }
+                  if (dev->data)
+                          vfree(dev->data);
+-- 
+1.7.4.4
+
+
+From eddadb08a8cac725401f0d2e7c9648c87277fe9e Mon Sep 17 00:00:00 2001
+From: admirej <admirej@onid.orst.edu>
+Date: Thu, 2 Jun 2011 21:53:51 -0700
+Subject: [PATCH 06/14] Another round of fixing compiler errors.
+
+---
+ linux-2.6.34.7/drivers/block/osurd.c |    8 ++++----
+ 1 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/linux-2.6.34.7/drivers/block/osurd.c b/linux-2.6.34.7/drivers/block/osurd.c
+index b0e6128..b83eef3 100644
+--- a/linux-2.6.34.7/drivers/block/osurd.c
++++ b/linux-2.6.34.7/drivers/block/osurd.c
+@@ -141,7 +141,7 @@
+ 
+  static int osurd_open(struct block_device *bdev, fmode_t mode)
+  {
+-         struct osurd_dev dev = bdev->bd_disk->private_data;
++         struct osurd_dev *dev = bdev->bd_disk->private_data;
+          del_timer_sync(&dev->timer);
+          spin_lock(&dev->lock);
+          if (! dev->users)
+@@ -217,7 +217,7 @@
+  {
+          long size;
+          struct hd_geometry geo;
+-         struct osurd_dev dev = bdev->bd_disk->private_data;
++         struct osurd_dev *dev = bdev->bd_disk->private_data;
+ 
+          switch(cmd) {
+              case HDIO_GETGEO:
+@@ -242,7 +242,7 @@
+ 
+ int osurd_getgeo(struct block_device * bdev, struct hd_geometry * geo) {
+ 	long size;
+-	struct osurd_dev dev = bdev->bd_disk->private_data;
++	struct osurd_dev *dev = bdev->bd_disk->private_data;
+ 
+ 	/* We have no real geometry, of course, so make something up. */
+ 	size = dev->size*(hardsect_size/KERNEL_SECTOR_SIZE);
+@@ -263,7 +263,7 @@ int osurd_getgeo(struct block_device * bdev, struct hd_geometry * geo) {
+          .release         = osurd_release,
+          .media_changed   = osurd_media_changed,
+          .revalidate_disk = osurd_revalidate,
+-         .ioctl           = osurd_ioctl
++         .ioctl           = osurd_ioctl,
+          .getgeo          = osurd_getgeo
+  };
+ 
+-- 
+1.7.4.4
+
+
+From f0a2f9fe6a23299e41a3feb52081c9963b0a2a95 Mon Sep 17 00:00:00 2001
+From: admirej <admirej@onid.orst.edu>
+Date: Thu, 2 Jun 2011 22:26:42 -0700
+Subject: [PATCH 07/14] attempting to fix a end_request bug.
+
+---
+ linux-2.6.34.7/drivers/block/osurd.c |    4 +++-
+ 1 files changed, 3 insertions(+), 1 deletions(-)
+
+diff --git a/linux-2.6.34.7/drivers/block/osurd.c b/linux-2.6.34.7/drivers/block/osurd.c
+index b83eef3..87ac31b 100644
+--- a/linux-2.6.34.7/drivers/block/osurd.c
++++ b/linux-2.6.34.7/drivers/block/osurd.c
+@@ -131,7 +131,9 @@
+      //                          req->flags);
+                  osurd_transfer(dev, blk_rq_pos(req), blk_rq_cur_sectors(req),
+                                  req->buffer, rq_data_dir(req));
+-                 blk_end_request(req, 1, blk_rq_cur_sectors(req));
++                 if ( ! __blk_end_request_cur(req, 0) ) {
++                         req = blk_fetch_request(q);
++                 }
+          }
+  }
+ 
+-- 
+1.7.4.4
+
+
+From f0e5fbe4f5569696d3b52ae0751b851aea2d0c83 Mon Sep 17 00:00:00 2001
+From: admirej <admirej@onid.orst.edu>
+Date: Thu, 2 Jun 2011 23:19:51 -0700
+Subject: [PATCH 08/14] Code was locking up VM, made some changes.
+
+---
+ linux-2.6.34.7/drivers/block/osurd.c |   31 ++++++++++---------------------
+ 1 files changed, 10 insertions(+), 21 deletions(-)
+
+diff --git a/linux-2.6.34.7/drivers/block/osurd.c b/linux-2.6.34.7/drivers/block/osurd.c
+index 87ac31b..82fa6b8 100644
+--- a/linux-2.6.34.7/drivers/block/osurd.c
++++ b/linux-2.6.34.7/drivers/block/osurd.c
+@@ -4,6 +4,8 @@
+   * A simple ram disk driver.
+   * Code is modified from the 2.6.31.13 version of the sbull driver
+   * from http://www.cs.fsu.edu/~baker/devices/lxr/http/source/ldd-examples/sbull/sbull.c
++  * Also used http://blog.superpat.com/2010/05/04/a-simple-block-driver-for-linux-kernel-2-6-31/
++  * as a reference.
+   */
+ 
+   /* Working on getting the code to compile.  I removed the request modes and a
+@@ -13,15 +15,6 @@
+    * in printk stmts.
+    */
+ 
+-  /* This version still has a lot changes that need to be made to it.  We would have to
+-   * change the request stuff and the inode stuff.  The link at the end should help.
+-   * It also has a lot of extra code that we would have to go through and probably
+-   * change.  It has a lot of code already written on the other hand.  We may want to
+-   * use the code from http://blog.superpat.com/2010/05/04/a-simple-block-driver-for-linux-kernel-2-6-31/
+-   * instead.
+-   */
+-
+-
+  /*
+   * Sample disk driver, from the beginning.
+   */
+@@ -54,7 +47,7 @@
+  module_param(hardsect_size, int, 0);
+  static int nsectors = 1024;     /* How big the drive is */
+  module_param(nsectors, int, 0);
+- static int ndevices = 4;
++ static int ndevices = 1;
+  module_param(ndevices, int, 0);
+ 
+ 
+@@ -118,19 +111,15 @@
+  {
+          struct request *req;
+ 
+-         while ((req = blk_fetch_request(q)) != NULL) {
+-                 struct osurd_dev *dev = req->rq_disk->private_data;
+-                 if (! blk_fs_request(req)) {
+-                         printk (KERN_NOTICE "Skip non-fs request\n");
+-                         blk_end_request(req, -EIO, blk_rq_cur_sectors(req));
++         req = blk_fetch_request(q);
++         while (req != NULL) {
++                 if (!blk_fs_request(req)) {
++                         printk (KERN_NOTICE "Skip non-CMD request\n");
++                         __blk_end_request_all(req, -EIO);
+                          continue;
+                  }
+-     //          printk (KERN_NOTICE "Req dev %d dir %ld sec %ld, nr %d f %lx\n",
+-     //                          dev - Devices, rq_data_dir(req),
+-     //                          req->sector, req->current_nr_sectors,
+-     //                          req->flags);
+-                 osurd_transfer(dev, blk_rq_pos(req), blk_rq_cur_sectors(req),
+-                                 req->buffer, rq_data_dir(req));
++                 osurd_transfer(&Device, blk_rq_pos(req), blk_rq_cur_sectors(req),
++                 req->buffer, rq_data_dir(req));
+                  if ( ! __blk_end_request_cur(req, 0) ) {
+                          req = blk_fetch_request(q);
+                  }
+-- 
+1.7.4.4
+
+
+From 4aaaa41aa359fe4c6b2a33956055fa3a8df1e516 Mon Sep 17 00:00:00 2001
+From: admirej <admirej@onid.orst.edu>
+Date: Thu, 2 Jun 2011 23:27:12 -0700
+Subject: [PATCH 09/14] Fixed a compiler error.
+
+---
+ linux-2.6.34.7/drivers/block/osurd.c |    4 +++-
+ 1 files changed, 3 insertions(+), 1 deletions(-)
+
+diff --git a/linux-2.6.34.7/drivers/block/osurd.c b/linux-2.6.34.7/drivers/block/osurd.c
+index 82fa6b8..08851cc 100644
+--- a/linux-2.6.34.7/drivers/block/osurd.c
++++ b/linux-2.6.34.7/drivers/block/osurd.c
+@@ -110,15 +110,17 @@
+  static void osurd_request(struct request_queue *q)
+  {
+          struct request *req;
++         struct osurd_dev *dev;
+ 
+          req = blk_fetch_request(q);
++         dev = req->rq_disk->private_data;
+          while (req != NULL) {
+                  if (!blk_fs_request(req)) {
+                          printk (KERN_NOTICE "Skip non-CMD request\n");
+                          __blk_end_request_all(req, -EIO);
+                          continue;
+                  }
+-                 osurd_transfer(&Device, blk_rq_pos(req), blk_rq_cur_sectors(req),
++                 osurd_transfer(dev, blk_rq_pos(req), blk_rq_cur_sectors(req),
+                  req->buffer, rq_data_dir(req));
+                  if ( ! __blk_end_request_cur(req, 0) ) {
+                          req = blk_fetch_request(q);
+-- 
+1.7.4.4
+
+
+From 79c075c00f5f7f1969f1e4d5ffe35f3442d773ee Mon Sep 17 00:00:00 2001
+From: admirej <admirej@onid.orst.edu>
+Date: Fri, 3 Jun 2011 02:22:48 -0700
+Subject: [PATCH 10/14] Added some printk's and the disksize module param.
+
+---
+ linux-2.6.34.7/drivers/block/osurd.c |   74 ++++++++++++++++++++++++++-------
+ 1 files changed, 58 insertions(+), 16 deletions(-)
+
+diff --git a/linux-2.6.34.7/drivers/block/osurd.c b/linux-2.6.34.7/drivers/block/osurd.c
+index 08851cc..83d5dbb 100644
+--- a/linux-2.6.34.7/drivers/block/osurd.c
++++ b/linux-2.6.34.7/drivers/block/osurd.c
+@@ -8,11 +8,9 @@
+   * as a reference.
+   */
+ 
+-  /* Working on getting the code to compile.  I removed the request modes and a
+-   * a lot of the extra request functions because they are unneccessary and harder
+-   * to write in the newer version of the kernel. Someone could add in the module
+-   * params and add checks to the setup function. Someone else might start adding
+-   * in printk stmts.
++  /* I added the module param and did some checking in the setup function.  I don't
++   * know if the checking is needed or not. I also added some printk's, but more
++   * might be beneficial.
+    */
+ 
+  /*
+@@ -39,6 +37,8 @@
+  #include <linux/buffer_head.h>  /* invalidate_bdev */
+  #include <linux/bio.h>
+ 
++ #include <asm-generic/bitops.h> /* fls() */
++
+  MODULE_LICENSE("Dual BSD/GPL");
+ 
+  static int osurd_major = 0;
+@@ -49,6 +49,8 @@
+  module_param(nsectors, int, 0);
+  static int ndevices = 1;
+  module_param(ndevices, int, 0);
++ static int disksize = 0;
++ module_param(disksize, int, 0);
+ 
+ 
+  /*
+@@ -98,10 +100,13 @@
+                  printk (KERN_NOTICE "Beyond-end write (%ld %ld)\n", offset, nbytes);
+                  return;
+          }
+-         if (write)
++         if (write){
+                  memcpy(dev->data + offset, buffer, nbytes);
+-         else
++                 printk("Osurd: wrote\n");
++         }else{
+                  memcpy(buffer, dev->data + offset, nbytes);
++                 printk("Osurd: read\n");
++         }
+  }
+ 
+  /*
+@@ -112,6 +117,8 @@
+          struct request *req;
+          struct osurd_dev *dev;
+ 
++         printk("Osurd: request called\n");
++
+          req = blk_fetch_request(q);
+          dev = req->rq_disk->private_data;
+          while (req != NULL) {
+@@ -136,6 +143,7 @@
+  {
+          struct osurd_dev *dev = bdev->bd_disk->private_data;
+          del_timer_sync(&dev->timer);
++         printk("Osurd: open called\n");
+          spin_lock(&dev->lock);
+          if (! dev->users)
+                  check_disk_change(bdev);
+@@ -148,6 +156,8 @@
+  {
+          struct osurd_dev *dev = gd->private_data;
+ 
++         printk("Osurd: release called\n");
++
+          spin_lock(&dev->lock);
+          dev->users--;
+ 
+@@ -165,6 +175,8 @@
+   */
+  int osurd_media_changed(struct gendisk *gd)
+  {
++         printk("Osurd: media changed called.\n");
++
+          struct osurd_dev *dev = gd->private_data;
+ 
+          return dev->media_change;
+@@ -176,6 +188,8 @@
+   */
+  int osurd_revalidate(struct gendisk *gd)
+  {
++         printk("Osurd: revalidate called.\n");
++
+          struct osurd_dev *dev = gd->private_data;
+ 
+          if (dev->media_change) {
+@@ -191,6 +205,8 @@
+   */
+  void osurd_invalidate(unsigned long ldev)
+  {
++         printk("Osurd: invalidate called.\n");
++
+          struct osurd_dev *dev = (struct osurd_dev *) ldev;
+ 
+          spin_lock(&dev->lock);
+@@ -208,6 +224,8 @@
+  int osurd_ioctl (struct block_device *bdev, fmode_t mode,
+                   unsigned int cmd, unsigned long arg)
+  {
++         printk("Osurd: ioctl called.\n");
++
+          long size;
+          struct hd_geometry geo;
+          struct osurd_dev *dev = bdev->bd_disk->private_data;
+@@ -234,6 +252,8 @@
+  }
+ 
+ int osurd_getgeo(struct block_device * bdev, struct hd_geometry * geo) {
++    printk("Osurd: getgeo called.\n");
++
+ 	long size;
+ 	struct osurd_dev *dev = bdev->bd_disk->private_data;
+ 
+@@ -264,14 +284,25 @@ int osurd_getgeo(struct block_device * bdev, struct hd_geometry * geo) {
+  /*
+   * Set up our internal device.
+   */
+- static void setup_device(struct osurd_dev *dev, int which)
++ static int setup_device(struct osurd_dev *dev, int which)
+  {
+-         /* Check params?
+-          * Hardsect % 512 should be zero and > 512
+-          * Disksize % 512 should be zero?
+-          * Disksize % Hardsect should be zero (to get right number of sectors)
++         printk("Osurd: setup called.\n");
++
++         /*
++          * Check module params
+           */
++         if(hardsect_size < 512 || hardsect_size % 512 != 0){
++                 printk (KERN_NOTICE "hardsect size invalid.\n");
++                 return -EINVAL;
++         }
+ 
++         if(disksize){
++                 if(disksize % 512 != 0){
++                      printk ("hardsect size invalid. Switching to nearest power of 2\n");
++                      disksize = fls(disksize) << 1;
++                 }
++                 nsectors = disksize/hardsect_size;
++         }
+          /*
+           * Get some memory.
+           */
+@@ -280,7 +311,7 @@ int osurd_getgeo(struct block_device * bdev, struct hd_geometry * geo) {
+          dev->data = vmalloc(dev->size);
+          if (dev->data == NULL) {
+                  printk (KERN_NOTICE "vmalloc failure.\n");
+-                 return;
++                 return -ENOMEM;
+          }
+          spin_lock_init(&dev->lock);
+ 
+@@ -322,6 +353,7 @@ int osurd_getgeo(struct block_device * bdev, struct hd_geometry * geo) {
+    out_vfree:
+          if (dev->data)
+                  vfree(dev->data);
++         return -ENOMEM;
+  }
+ 
+ 
+@@ -329,6 +361,10 @@ int osurd_getgeo(struct block_device * bdev, struct hd_geometry * geo) {
+  static int __init osurd_init(void)
+  {
+          int i;
++         int ret = 0;
++
++         printk("Osurd: init called\n");
++
+          /*
+           * Get registered.
+           */
+@@ -341,22 +377,28 @@ int osurd_getgeo(struct block_device * bdev, struct hd_geometry * geo) {
+           * Allocate the device array, and initialize each one.
+           */
+          Devices = kmalloc(ndevices*sizeof (struct osurd_dev), GFP_KERNEL);
+-         if (Devices == NULL)
++         if (Devices == NULL){
++                 ret = -ENOMEM;
+                  goto out_unregister;
++         }
+          for (i = 0; i < ndevices; i++)
+-                 setup_device(Devices + i, i);
++                 ret = setup_device(Devices + i, i);
++                 if(ret)
++                         goto out_unregister;
+ 
+          return 0;
+ 
+    out_unregister:
+          unregister_blkdev(osurd_major, "osurd");
+-         return -ENOMEM;
++         return ret;
+  }
+ 
+  static void osurd_exit(void)
+  {
+          int i;
+ 
++         printk("Osurd: exit called.\n");
++
+          for (i = 0; i < ndevices; i++) {
+                  struct osurd_dev *dev = Devices + i;
+ 
+-- 
+1.7.4.4
+
+
+From f381c36226d3ad3b7a7a9b69ea1f3ebc27951e51 Mon Sep 17 00:00:00 2001
+From: admirej <admirej@onid.orst.edu>
+Date: Fri, 3 Jun 2011 02:33:42 -0700
+Subject: [PATCH 11/14] Fixed some compiler errors and warnings.
+
+---
+ linux-2.6.34.7/drivers/block/osurd.c |   23 +++++++++++------------
+ 1 files changed, 11 insertions(+), 12 deletions(-)
+
+diff --git a/linux-2.6.34.7/drivers/block/osurd.c b/linux-2.6.34.7/drivers/block/osurd.c
+index 83d5dbb..59b2044 100644
+--- a/linux-2.6.34.7/drivers/block/osurd.c
++++ b/linux-2.6.34.7/drivers/block/osurd.c
+@@ -37,8 +37,6 @@
+  #include <linux/buffer_head.h>  /* invalidate_bdev */
+  #include <linux/bio.h>
+ 
+- #include <asm-generic/bitops.h> /* fls() */
+-
+  MODULE_LICENSE("Dual BSD/GPL");
+ 
+  static int osurd_major = 0;
+@@ -175,10 +173,10 @@
+   */
+  int osurd_media_changed(struct gendisk *gd)
+  {
+-         printk("Osurd: media changed called.\n");
+-
+          struct osurd_dev *dev = gd->private_data;
+ 
++         printk("Osurd: media changed called.\n");
++
+          return dev->media_change;
+  }
+ 
+@@ -188,10 +186,10 @@
+   */
+  int osurd_revalidate(struct gendisk *gd)
+  {
+-         printk("Osurd: revalidate called.\n");
+-
+          struct osurd_dev *dev = gd->private_data;
+ 
++         printk("Osurd: revalidate called.\n");
++
+          if (dev->media_change) {
+                  dev->media_change = 0;
+                  memset (dev->data, 0, dev->size);
+@@ -205,10 +203,10 @@
+   */
+  void osurd_invalidate(unsigned long ldev)
+  {
+-         printk("Osurd: invalidate called.\n");
+-
+          struct osurd_dev *dev = (struct osurd_dev *) ldev;
+ 
++         printk("Osurd: invalidate called.\n");
++
+          spin_lock(&dev->lock);
+          if (dev->users || !dev->data)
+                  printk (KERN_WARNING "osurd: timer sanity check failed\n");
+@@ -224,12 +222,12 @@
+  int osurd_ioctl (struct block_device *bdev, fmode_t mode,
+                   unsigned int cmd, unsigned long arg)
+  {
+-         printk("Osurd: ioctl called.\n");
+-
+          long size;
+          struct hd_geometry geo;
+          struct osurd_dev *dev = bdev->bd_disk->private_data;
+ 
++         printk("Osurd: ioctl called.\n");
++
+          switch(cmd) {
+              case HDIO_GETGEO:
+                  /*
+@@ -252,11 +250,12 @@
+  }
+ 
+ int osurd_getgeo(struct block_device * bdev, struct hd_geometry * geo) {
+-    printk("Osurd: getgeo called.\n");
+ 
+ 	long size;
+ 	struct osurd_dev *dev = bdev->bd_disk->private_data;
+ 
++	printk("Osurd: getgeo called.\n");
++
+ 	/* We have no real geometry, of course, so make something up. */
+ 	size = dev->size*(hardsect_size/KERNEL_SECTOR_SIZE);
+ 	geo->cylinders = (size & ~0x3f) >> 6;
+@@ -348,7 +347,7 @@ int osurd_getgeo(struct block_device * bdev, struct hd_geometry * geo) {
+          snprintf (dev->gd->disk_name, 32, "osurd%c", which + 'a');
+          set_capacity(dev->gd, nsectors*(hardsect_size/KERNEL_SECTOR_SIZE));
+          add_disk(dev->gd);
+-         return;
++         return 0;
+ 
+    out_vfree:
+          if (dev->data)
+-- 
+1.7.4.4
+
+
+From 529b1c83940823bad86309134d0ac1325d62370c Mon Sep 17 00:00:00 2001
+From: urbanyeti <urbanski@gmail.com>
+Date: Fri, 3 Jun 2011 13:44:10 -0700
+Subject: [PATCH 12/14] Added osurd_encrypt function and key. Needs testing
+ and implementation.
+
+---
+ linux-2.6.34.7/drivers/block/osurd.c |   48 ++++++++++++++++++++++++++++++++++
+ 1 files changed, 48 insertions(+), 0 deletions(-)
+
+diff --git a/linux-2.6.34.7/drivers/block/osurd.c b/linux-2.6.34.7/drivers/block/osurd.c
+index 59b2044..80374b6 100644
+--- a/linux-2.6.34.7/drivers/block/osurd.c
++++ b/linux-2.6.34.7/drivers/block/osurd.c
+@@ -50,6 +50,8 @@
+  static int disksize = 0;
+  module_param(disksize, int, 0);
+ 
++ static char *key = "password";
++ static int key_length = 8;
+ 
+  /*
+   * Minor number and partition management.
+@@ -85,6 +87,52 @@
+ 
+  static struct osurd_dev *Devices = NULL;
+ 
++ static int osurd_encrypt(char *input, int input_length, int enc)
++ {
++
++		 char *algo = "ecb(aes)";
++
++	 	 struct crypto_ablkcipher *tfm;   //Declares the tfm (transform) structure
++	   	 struct ablkcipher_request *req;  //Declares the request structure
++		 struct completion comp;          //Declares the completion structure
++		 struct scatterlist sg[8];        //Declares the scatterlist
++		 int ret;			 //for holding errors if the setkey fails
++
++		 char iv = 0xf8;
++
++		 init_completion(&comp);
++
++		 tfm = crypto_alloc_ablkcipher(algo, 0, 0);
++		 req = ablkcipher_request_alloc(tfm, GFP_KERNEL);
++		 crypto_ablkcipher_clear_flags(tfm, ~0);
++		 crypto_ablkcipher_set_flags(tfm, CRYPTO_TFM_REQ_WEAK_KEY);
++		 ret = crypto_ablkcipher_setkey(tfm, &key[0], key_length);
++		 sg_set_buf(&sg[0], input, input_length);
++		 ablkcipher_request_set_crypt(req, sg, sg, input_length, iv);
++		 ret = enc ? crypto_ablkcipher_encrypt(req) : crypto_ablkcipher_decrypt(req);
++
++		 switch (ret) {
++		 case 0:
++			 break;
++		 case -EINPROGRESS:
++		 case -EBUSY:
++			 ret = wait_for_completion_interruptible(&comp);
++			 if (!ret) {
++				 INIT_COMPLETION(comp);
++				 break;
++			 }
++
++		 default:
++		 	 printk("%d () failed err=%d\n", enc, -ret);
++			 goto out;
++		 }
++
++	 out:
++		 crypto_free_ablkcipher(tfm);
++		 ablkcipher_request_free(req);
++
++ }
++
+  /*
+   * Handle an I/O request.
+   */
+-- 
+1.7.4.4
+
+
+From 755236b604828c2e978250315ba1563a37c4b76a Mon Sep 17 00:00:00 2001
+From: urbanyeti <urbanski@gmail.com>
+Date: Fri, 3 Jun 2011 13:46:37 -0700
+Subject: [PATCH 13/14] Added acknowledgement
+
+---
+ linux-2.6.34.7/drivers/block/osurd.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/linux-2.6.34.7/drivers/block/osurd.c b/linux-2.6.34.7/drivers/block/osurd.c
+index 80374b6..cd34aec 100644
+--- a/linux-2.6.34.7/drivers/block/osurd.c
++++ b/linux-2.6.34.7/drivers/block/osurd.c
+@@ -5,7 +5,7 @@
+   * Code is modified from the 2.6.31.13 version of the sbull driver
+   * from http://www.cs.fsu.edu/~baker/devices/lxr/http/source/ldd-examples/sbull/sbull.c
+   * Also used http://blog.superpat.com/2010/05/04/a-simple-block-driver-for-linux-kernel-2-6-31/
+-  * as a reference.
++  * and code from Linux Device Drivers, Third Edition (O'Reilly Media) for reference.
+   */
+ 
+   /* I added the module param and did some checking in the setup function.  I don't
+-- 
+1.7.4.4
+
+
+From 27a5a5a71476eb8c58a564195a95f0dfe8699603 Mon Sep 17 00:00:00 2001
+From: Lewis Valentine <Valentil@onid.orst.edu>
+Date: Fri, 3 Jun 2011 16:35:59 -0700
+Subject: [PATCH 14/14] Implemented encryption and modified osurd_request
+
+---
+ linux-2.6.34.7/drivers/block/osurd.c |   35 +++++++++++++++++++++++----------
+ 1 files changed, 24 insertions(+), 11 deletions(-)
+
+diff --git a/linux-2.6.34.7/drivers/block/osurd.c b/linux-2.6.34.7/drivers/block/osurd.c
+index cd34aec..3e7db33 100644
+--- a/linux-2.6.34.7/drivers/block/osurd.c
++++ b/linux-2.6.34.7/drivers/block/osurd.c
+@@ -51,7 +51,8 @@
+  module_param(disksize, int, 0);
+ 
+  static char *key = "password";
+- static int key_length = 8;
++ module_param(key, char, 0);
++ static int key_length = strlen(key);
+ 
+  /*
+   * Minor number and partition management.
+@@ -168,16 +169,28 @@
+          req = blk_fetch_request(q);
+          dev = req->rq_disk->private_data;
+          while (req != NULL) {
+-                 if (!blk_fs_request(req)) {
+-                         printk (KERN_NOTICE "Skip non-CMD request\n");
+-                         __blk_end_request_all(req, -EIO);
+-                         continue;
+-                 }
+-                 osurd_transfer(dev, blk_rq_pos(req), blk_rq_cur_sectors(req),
+-                 req->buffer, rq_data_dir(req));
+-                 if ( ! __blk_end_request_cur(req, 0) ) {
+-                         req = blk_fetch_request(q);
+-                 }
++                  if (!blk_fs_request(req)) {
++                          printk (KERN_NOTICE "Skip non-CMD request\n");
++                          __blk_end_request_all(req, -EIO);
++                          continue;
++                  }
++		 enc_size = (req->current_nr_sectors)*KERNEL_SECTOR_SIZE;
++		 enc_area = kmalloc(enc_size, GFP_KERNEL);
++		 if(rq_data_dir(req)) {
++			 memcpy(enc_area, req->buffer, enc_size);
++			 osurd_encrpyt(enc_area, enc_size, 1);
++		 	 osurd_transfer(dev, req->sector, req->current_nr_sectors, enc_area, rq_data_dir(req));
++		
++		 } else{
++			 osurd_encrpyt(enc_area, enc_size, 1);
++			 osurd_transfer(dev, req->sector, req->current_nr_sectors, enc_area, rq_data_dir(req));
++			 memcpy(req->buffer, enc_area, enc_size);
++		 }
++		 kfree(enc_area);
++		 end_request(req,1);
++		 if( ! __blk_end_request_cur(req, 0) ) {
++			 req = blk_fetch_request(q);
++		 }
+          }
+  }
+ 
+-- 
+1.7.4.4
+
