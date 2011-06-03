@@ -139,12 +139,13 @@
   * Open and close.
   */
 
- static int osurd_open(struct osurd_dev *dev, fmode_t mode)
+ static int osurd_open(struct block_device *bdev, fmode_t mode)
  {
+         struct osurd_dev dev = bdev->bd_disk->private_data;
          del_timer_sync(&dev->timer);
          spin_lock(&dev->lock);
          if (! dev->users)
-                 check_disk_change(dev);
+                 check_disk_change(bdev);
          dev->users++;
          spin_unlock(&dev->lock);
          return 0;
@@ -211,11 +212,12 @@
   * The ioctl() implementation
   */
 
- int osurd_ioctl (struct osurd_dev *dev, fmode_t mode,
+ int osurd_ioctl (struct block_device *bdev, fmode_t mode,
                   unsigned int cmd, unsigned long arg)
  {
          long size;
          struct hd_geometry geo;
+         struct osurd_dev dev = bdev->bd_disk->private_data;
 
          switch(cmd) {
              case HDIO_GETGEO:
@@ -238,8 +240,9 @@
          return -ENOTTY; /* unknown command */
  }
 
-int osurd_getgeo(struct osurd_dev * dev, struct hd_geometry * geo) {
+int osurd_getgeo(struct block_device * bdev, struct hd_geometry * geo) {
 	long size;
+	struct osurd_dev dev = bdev->bd_disk->private_data;
 
 	/* We have no real geometry, of course, so make something up. */
 	size = dev->size*(hardsect_size/KERNEL_SECTOR_SIZE);
@@ -370,11 +373,7 @@ int osurd_getgeo(struct osurd_dev * dev, struct hd_geometry * geo) {
                          put_disk(dev->gd);
                  }
                  if (dev->queue) {
-                         if (request_mode == RM_NOQUEUE)
-                                 kobject_put (&dev->queue->kobj);
-                                 /* blk_put_queue() is no longer an exported symbol */
-                         else
-                                 blk_cleanup_queue(dev->queue);
+                         blk_cleanup_queue(dev->queue);
                  }
                  if (dev->data)
                          vfree(dev->data);
