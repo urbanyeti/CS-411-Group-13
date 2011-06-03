@@ -110,15 +110,17 @@
  static void osurd_request(struct request_queue *q)
  {
          struct request *req;
+         struct osurd_dev *dev;
 
          req = blk_fetch_request(q);
+         dev = req->rq_disk->private_data;
          while (req != NULL) {
                  if (!blk_fs_request(req)) {
                          printk (KERN_NOTICE "Skip non-CMD request\n");
                          __blk_end_request_all(req, -EIO);
                          continue;
                  }
-                 osurd_transfer(&Device, blk_rq_pos(req), blk_rq_cur_sectors(req),
+                 osurd_transfer(dev, blk_rq_pos(req), blk_rq_cur_sectors(req),
                  req->buffer, rq_data_dir(req));
                  if ( ! __blk_end_request_cur(req, 0) ) {
                          req = blk_fetch_request(q);
