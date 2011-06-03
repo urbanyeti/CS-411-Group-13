@@ -6,6 +6,13 @@
   * from http://www.cs.fsu.edu/~baker/devices/lxr/http/source/ldd-examples/sbull/sbull.c
   */
 
+  /* Working on getting the code to compile.  I removed the request modes and a
+   * a lot of the extra request functions because they are unneccessary and harder
+   * to write in the newer version of the kernel. Someone could add in the module
+   * params and add checks to the setup function. Someone else might start adding
+   * in printk stmts.
+   */
+
   /* This version still has a lot changes that need to be made to it.  We would have to
    * change the request stuff and the inode stuff.  The link at the end should help.
    * It also has a lot of extra code that we would have to go through and probably
@@ -50,16 +57,6 @@
  static int ndevices = 4;
  module_param(ndevices, int, 0);
 
- /*
-  * The different "request modes" we can use.
-  */
- enum {
-         RM_SIMPLE  = 0, /* The extra-simple request function */
-         RM_FULL    = 1, /* The full-blown version */
-         RM_NOQUEUE = 2, /* Use make_request */
- };
- static int request_mode = RM_SIMPLE;
- module_param(request_mode, int, 0);
 
  /*
   * Minor number and partition management.
@@ -121,7 +118,7 @@
  {
          struct request *req;
 
-         while ((req = elv_next_request(q)) != NULL) {
+         while ((req = blk_fetch_request(q)) != NULL) {
                  struct osurd_dev *dev = req->rq_disk->private_data;
                  if (! blk_fs_request(req)) {
                          printk (KERN_NOTICE "Skip non-fs request\n");
@@ -138,88 +135,6 @@
          }
  }
 
-
- /*
-  * Transfer a single BIO.
-  */
- static int osurd_xfer_bio(struct osurd_dev *dev, struct bio *bio)
- {
-         int i;
-         struct bio_vec *bvec;
-         sector_t sector = bio->bi_sector;
-
-         /* Do each segment independently. */
-         bio_for_each_segment(bvec, bio, i) {
-                 char *buffer = __bio_kmap_atomic(bio, i, KM_USER0);
-                 osurd_transfer(dev, sector, bio_cur_sectors(bio),
-                                 buffer, bio_data_dir(bio) == WRITE);
-                 sector += bio_cur_sectors(bio);
-                 __bio_kunmap_atomic(bio, KM_USER0);
-         }
-         return 0; /* Always "succeed" */
- }
-
- /*
-  * Transfer a full request.
-  */
- static int osurd_xfer_request(struct osurd_dev *dev, struct request *req)
- {
-
-         struct req_iterator iter;
-         int nsect = 0;
-         struct bio_vec *bvec;
-
-         /* Macro rq_for_each_bio is gone.
-          * In most cases one should use rq_for_each_segment.
-          */
-         rq_for_each_segment(bvec, req, iter) {
-                 char *buffer = __bio_kmap_atomic(iter.bio, iter.i, KM_USER0);
-                 sector_t sector = iter.bio->bi_sector;
-                 osurd_transfer(dev, sector, bio_cur_sectors(iter.bio),
-                                buffer, bio_data_dir(iter.bio) == WRITE);
-                 sector += bio_cur_sectors(iter.bio);
-                 __bio_kunmap_atomic(iter.bio, KM_USER0);
-                 nsect += iter.bio->bi_size/KERNEL_SECTOR_SIZE;
-         }
-         return nsect;
- }
-
-
- /*
-  * Smarter request function that "handles clustering".
-  */
- static void osurd_full_request(struct request_queue *q)
- {
-         struct request *req;
-         int sectors_xferred;
-         struct osurd_dev *dev = q->queuedata;
-
-         while ((req = elv_next_request(q)) != NULL) {
-                 if (! blk_fs_request(req)) {
-                         printk (KERN_NOTICE "Skip non-fs request\n");
-                         end_request(req, 0);
-                         continue;
-                 }
-                 sectors_xferred = osurd_xfer_request(dev, req);
-                 __blk_end_request (req, 1, sectors_xferred << 9);
-                 /* The above includes a call to add_disk_randomness(). */
-         }
- }
-
- /*
-  * The direct make request version.
-  */
-    static int osurd_make_request(struct request_queue *q, struct bio *bio)
- {
-         struct osurd_dev *dev = q->queuedata;
-         int status;
-
-         status = osurd_xfer_bio(dev, bio);
-         bio_endio(bio, status);
-         return 0;
- }
-
-
  /*
   * Open and close.
   */
@@ -227,16 +142,15 @@
  static int osurd_open(struct osurd_dev *dev, fmode_t mode)
  {
          del_timer_sync(&dev->timer);
-         filp->private_data = dev;
          spin_lock(&dev->lock);
          if (! dev->users)
-                 check_disk_change(inode->i_bdev);
+                 check_disk_change(dev);
          dev->users++;
          spin_unlock(&dev->lock);
          return 0;
  }
 
- static int osurd_release(struct gendisk *gd, struct fmode_t mode)
+ static int osurd_release(struct gendisk *gd, fmode_t mode)
  {
          struct osurd_dev *dev = gd->private_data;
 
@@ -324,7 +238,7 @@
          return -ENOTTY; /* unknown command */
  }
 
-int osurd_getgeo(struct osurd_device * dev, struct hd_geometry * geo) {
+int osurd_getgeo(struct osurd_dev * dev, struct hd_geometry * geo) {
 	long size;
 
 	/* We have no real geometry, of course, so make something up. */
@@ -356,6 +270,12 @@ int osurd_getgeo(struct osurd_device * dev, struct hd_geometry * geo) {
   */
  static void setup_device(struct osurd_dev *dev, int which)
  {
+         /* Check params?
+          * Hardsect % 512 should be zero and > 512
+          * Disksize % 512 should be zero?
+          * Disksize % Hardsect should be zero (to get right number of sectors)
+          */
+
          /*
           * Get some memory.
           */
@@ -379,31 +299,11 @@ int osurd_getgeo(struct osurd_device * dev, struct hd_geometry * geo) {
           * The I/O queue, depending on whether we are using our own
           * make_request function or not.
           */
-         switch (request_mode) {
-             case RM_NOQUEUE:
-                 dev->queue = blk_alloc_queue(GFP_KERNEL);
-                 if (dev->queue == NULL)
-                         goto out_vfree;
-                 blk_queue_make_request(dev->queue, osurd_make_request);
-                 break;
 
-             case RM_FULL:
-                 dev->queue = blk_init_queue(osurd_full_request, &dev->lock);
-                 if (dev->queue == NULL)
-                         goto out_vfree;
-                 break;
-
-             default:
-                 printk(KERN_NOTICE "Bad request mode %d, using simple\n", request_mode);
-                 /* fall into.. */
-
-             case RM_SIMPLE:
-                 dev->queue = blk_init_queue(osurd_request, &dev->lock);
-                 if (dev->queue == NULL)
-                         goto out_vfree;
-                 break;
-         }
-         blk_queue_hardsect_size(dev->queue, hardsect_size);
+         dev->queue = blk_init_queue(osurd_request, &dev->lock);
+         if (dev->queue == NULL)
+         goto out_vfree;
+         blk_queue_logical_block_size(dev->queue, hardsect_size);
          dev->queue->queuedata = dev;
          /*
           * And the gendisk structure.
