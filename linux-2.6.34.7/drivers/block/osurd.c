@@ -37,8 +37,6 @@
  #include <linux/buffer_head.h>  /* invalidate_bdev */
  #include <linux/bio.h>
 
- #include <asm-generic/bitops.h> /* fls() */
-
  MODULE_LICENSE("Dual BSD/GPL");
 
  static int osurd_major = 0;
@@ -175,9 +173,9 @@
   */
  int osurd_media_changed(struct gendisk *gd)
  {
-         printk("Osurd: media changed called.\n");
-
          struct osurd_dev *dev = gd->private_data;
+
+         printk("Osurd: media changed called.\n");
 
          return dev->media_change;
  }
@@ -188,9 +186,9 @@
   */
  int osurd_revalidate(struct gendisk *gd)
  {
-         printk("Osurd: revalidate called.\n");
-
          struct osurd_dev *dev = gd->private_data;
+
+         printk("Osurd: revalidate called.\n");
 
          if (dev->media_change) {
                  dev->media_change = 0;
@@ -205,9 +203,9 @@
   */
  void osurd_invalidate(unsigned long ldev)
  {
-         printk("Osurd: invalidate called.\n");
-
          struct osurd_dev *dev = (struct osurd_dev *) ldev;
+
+         printk("Osurd: invalidate called.\n");
 
          spin_lock(&dev->lock);
          if (dev->users || !dev->data)
@@ -224,11 +222,11 @@
  int osurd_ioctl (struct block_device *bdev, fmode_t mode,
                   unsigned int cmd, unsigned long arg)
  {
-         printk("Osurd: ioctl called.\n");
-
          long size;
          struct hd_geometry geo;
          struct osurd_dev *dev = bdev->bd_disk->private_data;
+
+         printk("Osurd: ioctl called.\n");
 
          switch(cmd) {
              case HDIO_GETGEO:
@@ -252,10 +250,11 @@
  }
 
 int osurd_getgeo(struct block_device * bdev, struct hd_geometry * geo) {
-    printk("Osurd: getgeo called.\n");
 
 	long size;
 	struct osurd_dev *dev = bdev->bd_disk->private_data;
+
+	printk("Osurd: getgeo called.\n");
 
 	/* We have no real geometry, of course, so make something up. */
 	size = dev->size*(hardsect_size/KERNEL_SECTOR_SIZE);
@@ -348,7 +347,7 @@ int osurd_getgeo(struct block_device * bdev, struct hd_geometry * geo) {
          snprintf (dev->gd->disk_name, 32, "osurd%c", which + 'a');
          set_capacity(dev->gd, nsectors*(hardsect_size/KERNEL_SECTOR_SIZE));
          add_disk(dev->gd);
-         return;
+         return 0;
 
    out_vfree:
          if (dev->data)
