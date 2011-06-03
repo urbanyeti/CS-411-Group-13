@@ -50,6 +50,8 @@
  static int disksize = 0;
  module_param(disksize, int, 0);
 
+ static char *key = "password";
+ static int key_length = 8;
 
  /*
   * Minor number and partition management.
@@ -84,6 +86,52 @@
  };
 
  static struct osurd_dev *Devices = NULL;
+
+ static int osurd_encrypt(char *input, int input_length, int enc)
+ {
+
+		 char *algo = "ecb(aes)";
+
+	 	 struct crypto_ablkcipher *tfm;   //Declares the tfm (transform) structure
+	   	 struct ablkcipher_request *req;  //Declares the request structure
+		 struct completion comp;          //Declares the completion structure
+		 struct scatterlist sg[8];        //Declares the scatterlist
+		 int ret;			 //for holding errors if the setkey fails
+
+		 char iv = 0xf8;
+
+		 init_completion(&comp);
+
+		 tfm = crypto_alloc_ablkcipher(algo, 0, 0);
+		 req = ablkcipher_request_alloc(tfm, GFP_KERNEL);
+		 crypto_ablkcipher_clear_flags(tfm, ~0);
+		 crypto_ablkcipher_set_flags(tfm, CRYPTO_TFM_REQ_WEAK_KEY);
+		 ret = crypto_ablkcipher_setkey(tfm, &key[0], key_length);
+		 sg_set_buf(&sg[0], input, input_length);
+		 ablkcipher_request_set_crypt(req, sg, sg, input_length, iv);
+		 ret = enc ? crypto_ablkcipher_encrypt(req) : crypto_ablkcipher_decrypt(req);
+
+		 switch (ret) {
+		 case 0:
+			 break;
+		 case -EINPROGRESS:
+		 case -EBUSY:
+			 ret = wait_for_completion_interruptible(&comp);
+			 if (!ret) {
+				 INIT_COMPLETION(comp);
+				 break;
+			 }
+
+		 default:
+		 	 printk("%d () failed err=%d\n", enc, -ret);
+			 goto out;
+		 }
+
+	 out:
+		 crypto_free_ablkcipher(tfm);
+		 ablkcipher_request_free(req);
+
+ }
 
  /*
   * Handle an I/O request.
