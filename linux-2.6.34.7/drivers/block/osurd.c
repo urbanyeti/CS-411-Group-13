@@ -41,8 +41,8 @@
 
  MODULE_LICENSE("Dual BSD/GPL");
 
- static int sbull_major = 0;
- module_param(sbull_major, int, 0);
+ static int osurd_major = 0;
+ module_param(osurd_major, int, 0);
  static int hardsect_size = 512;
  module_param(hardsect_size, int, 0);
  static int nsectors = 1024;     /* How big the drive is */
@@ -64,7 +64,7 @@
  /*
   * Minor number and partition management.
   */
- #define SBULL_MINORS    16
+ #define OSURD_MINORS    16
  #define MINOR_SHIFT     4
  #define DEVNUM(kdevnum) (MINOR(kdev_t_to_nr(kdevnum)) >> MINOR_SHIFT
 
@@ -82,7 +82,7 @@
  /*
   * The internal representation of our device.
   */
- struct sbull_dev {
+ struct osurd_dev {
          int size;                       /* Device size in sectors */
          u8 *data;                       /* The data array */
          short users;                    /* How many users */
@@ -93,12 +93,12 @@
          struct timer_list timer;        /* For simulated media changes */
  };
 
- static struct sbull_dev *Devices = NULL;
+ static struct osurd_dev *Devices = NULL;
 
  /*
   * Handle an I/O request.
   */
- static void sbull_transfer(struct sbull_dev *dev, unsigned long sector,
+ static void osurd_transfer(struct osurd_dev *dev, sector_t sector,
                  unsigned long nsect, char *buffer, int write)
  {
          unsigned long offset = sector*KERNEL_SECTOR_SIZE;
@@ -117,24 +117,24 @@
  /*
   * The simple form of the request function.
   */
- static void sbull_request(struct request_queue *q)
+ static void osurd_request(struct request_queue *q)
  {
          struct request *req;
 
          while ((req = elv_next_request(q)) != NULL) {
-                 struct sbull_dev *dev = req->rq_disk->private_data;
+                 struct osurd_dev *dev = req->rq_disk->private_data;
                  if (! blk_fs_request(req)) {
                          printk (KERN_NOTICE "Skip non-fs request\n");
-                         blk_end_request(req, -EIO, req->current_nr_sectors << 9);
+                         blk_end_request(req, -EIO, blk_rq_cur_sectors(req));
                          continue;
                  }
      //          printk (KERN_NOTICE "Req dev %d dir %ld sec %ld, nr %d f %lx\n",
      //                          dev - Devices, rq_data_dir(req),
      //                          req->sector, req->current_nr_sectors,
      //                          req->flags);
-                 sbull_transfer(dev, req->sector, req->current_nr_sectors,
+                 osurd_transfer(dev, blk_rq_pos(req), blk_rq_cur_sectors(req),
                                  req->buffer, rq_data_dir(req));
-                 blk_end_request(req, 1, req->current_nr_sectors << 9);
+                 blk_end_request(req, 1, blk_rq_cur_sectors(req));
          }
  }
 
@@ -142,7 +142,7 @@
  /*
   * Transfer a single BIO.
   */
- static int sbull_xfer_bio(struct sbull_dev *dev, struct bio *bio)
+ static int osurd_xfer_bio(struct osurd_dev *dev, struct bio *bio)
  {
          int i;
          struct bio_vec *bvec;
@@ -151,7 +151,7 @@
          /* Do each segment independently. */
          bio_for_each_segment(bvec, bio, i) {
                  char *buffer = __bio_kmap_atomic(bio, i, KM_USER0);
-                 sbull_transfer(dev, sector, bio_cur_sectors(bio),
+                 osurd_transfer(dev, sector, bio_cur_sectors(bio),
                                  buffer, bio_data_dir(bio) == WRITE);
                  sector += bio_cur_sectors(bio);
                  __bio_kunmap_atomic(bio, KM_USER0);
@@ -162,7 +162,7 @@
  /*
   * Transfer a full request.
   */
- static int sbull_xfer_request(struct sbull_dev *dev, struct request *req)
+ static int osurd_xfer_request(struct osurd_dev *dev, struct request *req)
  {
 
          struct req_iterator iter;
@@ -175,7 +175,7 @@
          rq_for_each_segment(bvec, req, iter) {
                  char *buffer = __bio_kmap_atomic(iter.bio, iter.i, KM_USER0);
                  sector_t sector = iter.bio->bi_sector;
-                 sbull_transfer(dev, sector, bio_cur_sectors(iter.bio),
+                 osurd_transfer(dev, sector, bio_cur_sectors(iter.bio),
                                 buffer, bio_data_dir(iter.bio) == WRITE);
                  sector += bio_cur_sectors(iter.bio);
                  __bio_kunmap_atomic(iter.bio, KM_USER0);
@@ -188,11 +188,11 @@
  /*
   * Smarter request function that "handles clustering".
   */
- static void sbull_full_request(struct request_queue *q)
+ static void osurd_full_request(struct request_queue *q)
  {
          struct request *req;
          int sectors_xferred;
-         struct sbull_dev *dev = q->queuedata;
+         struct osurd_dev *dev = q->queuedata;
 
          while ((req = elv_next_request(q)) != NULL) {
                  if (! blk_fs_request(req)) {
@@ -200,7 +200,7 @@
                          end_request(req, 0);
                          continue;
                  }
-                 sectors_xferred = sbull_xfer_request(dev, req);
+                 sectors_xferred = osurd_xfer_request(dev, req);
                  __blk_end_request (req, 1, sectors_xferred << 9);
                  /* The above includes a call to add_disk_randomness(). */
          }
@@ -209,12 +209,12 @@
  /*
   * The direct make request version.
   */
-    static int sbull_make_request(struct request_queue *q, struct bio *bio)
+    static int osurd_make_request(struct request_queue *q, struct bio *bio)
  {
-         struct sbull_dev *dev = q->queuedata;
+         struct osurd_dev *dev = q->queuedata;
          int status;
 
-         status = sbull_xfer_bio(dev, bio);
+         status = osurd_xfer_bio(dev, bio);
          bio_endio(bio, status);
          return 0;
  }
@@ -224,10 +224,8 @@
   * Open and close.
   */
 
- static int sbull_open(struct inode *inode, struct file *filp)
+ static int osurd_open(struct osurd_dev *dev, fmode_t mode)
  {
-         struct sbull_dev *dev = inode->i_bdev->bd_disk->private_data;
-
          del_timer_sync(&dev->timer);
          filp->private_data = dev;
          spin_lock(&dev->lock);
@@ -238,9 +236,9 @@
          return 0;
  }
 
- static int sbull_release(struct inode *inode, struct file *filp)
+ static int osurd_release(struct gendisk *gd, struct fmode_t mode)
  {
-         struct sbull_dev *dev = inode->i_bdev->bd_disk->private_data;
+         struct osurd_dev *dev = gd->private_data;
 
          spin_lock(&dev->lock);
          dev->users--;
@@ -257,9 +255,9 @@
  /*
   * Look for a (simulated) media change.
   */
- int sbull_media_changed(struct gendisk *gd)
+ int osurd_media_changed(struct gendisk *gd)
  {
-         struct sbull_dev *dev = gd->private_data;
+         struct osurd_dev *dev = gd->private_data;
 
          return dev->media_change;
  }
@@ -268,9 +266,9 @@
   * Revalidate.  WE DO NOT TAKE THE LOCK HERE, for fear of deadlocking
   * with open.  That needs to be reevaluated.
   */
- int sbull_revalidate(struct gendisk *gd)
+ int osurd_revalidate(struct gendisk *gd)
  {
-         struct sbull_dev *dev = gd->private_data;
+         struct osurd_dev *dev = gd->private_data;
 
          if (dev->media_change) {
                  dev->media_change = 0;
@@ -283,13 +281,13 @@
   * The "invalidate" function runs out of the device timer; it sets
   * a flag to simulate the removal of the media.
   */
- void sbull_invalidate(unsigned long ldev)
+ void osurd_invalidate(unsigned long ldev)
  {
-         struct sbull_dev *dev = (struct sbull_dev *) ldev;
+         struct osurd_dev *dev = (struct osurd_dev *) ldev;
 
          spin_lock(&dev->lock);
          if (dev->users || !dev->data)
-                 printk (KERN_WARNING "sbull: timer sanity check failed\n");
+                 printk (KERN_WARNING "osurd: timer sanity check failed\n");
          else
                  dev->media_change = 1;
          spin_unlock(&dev->lock);
@@ -299,12 +297,11 @@
   * The ioctl() implementation
   */
 
- int sbull_ioctl (struct inode *inode, struct file *filp,
+ int osurd_ioctl (struct osurd_dev *dev, fmode_t mode,
                   unsigned int cmd, unsigned long arg)
  {
          long size;
          struct hd_geometry geo;
-         struct sbull_dev *dev = filp->private_data;
 
          switch(cmd) {
              case HDIO_GETGEO:
@@ -327,30 +324,42 @@
          return -ENOTTY; /* unknown command */
  }
 
+int osurd_getgeo(struct osurd_device * dev, struct hd_geometry * geo) {
+	long size;
+
+	/* We have no real geometry, of course, so make something up. */
+	size = dev->size*(hardsect_size/KERNEL_SECTOR_SIZE);
+	geo->cylinders = (size & ~0x3f) >> 6;
+	geo->heads = 4;
+	geo->sectors = 16;
+	geo->start = 4;
+	return 0;
+}
 
 
  /*
   * The device operations structure.
   */
- static struct block_device_operations sbull_ops = {
+ static struct block_device_operations osurd_ops = {
          .owner           = THIS_MODULE,
-         .open            = sbull_open,
-         .release         = sbull_release,
-         .media_changed   = sbull_media_changed,
-         .revalidate_disk = sbull_revalidate,
-         .ioctl           = sbull_ioctl
+         .open            = osurd_open,
+         .release         = osurd_release,
+         .media_changed   = osurd_media_changed,
+         .revalidate_disk = osurd_revalidate,
+         .ioctl           = osurd_ioctl
+         .getgeo          = osurd_getgeo
  };
 
 
  /*
   * Set up our internal device.
   */
- static void setup_device(struct sbull_dev *dev, int which)
+ static void setup_device(struct osurd_dev *dev, int which)
  {
          /*
           * Get some memory.
           */
-         memset (dev, 0, sizeof (struct sbull_dev));
+         memset (dev, 0, sizeof (struct osurd_dev));
          dev->size = nsectors*hardsect_size;
          dev->data = vmalloc(dev->size);
          if (dev->data == NULL) {
@@ -364,7 +373,7 @@
           */
          init_timer(&dev->timer);
          dev->timer.data = (unsigned long) dev;
-         dev->timer.function = sbull_invalidate;
+         dev->timer.function = osurd_invalidate;
 
          /*
           * The I/O queue, depending on whether we are using our own
@@ -375,11 +384,11 @@
                  dev->queue = blk_alloc_queue(GFP_KERNEL);
                  if (dev->queue == NULL)
                          goto out_vfree;
-                 blk_queue_make_request(dev->queue, sbull_make_request);
+                 blk_queue_make_request(dev->queue, osurd_make_request);
                  break;
 
              case RM_FULL:
-                 dev->queue = blk_init_queue(sbull_full_request, &dev->lock);
+                 dev->queue = blk_init_queue(osurd_full_request, &dev->lock);
                  if (dev->queue == NULL)
                          goto out_vfree;
                  break;
@@ -389,7 +398,7 @@
                  /* fall into.. */
 
              case RM_SIMPLE:
-                 dev->queue = blk_init_queue(sbull_request, &dev->lock);
+                 dev->queue = blk_init_queue(osurd_request, &dev->lock);
                  if (dev->queue == NULL)
                          goto out_vfree;
                  break;
@@ -399,17 +408,17 @@
          /*
           * And the gendisk structure.
           */
-         dev->gd = alloc_disk(SBULL_MINORS);
+         dev->gd = alloc_disk(OSURD_MINORS);
          if (! dev->gd) {
                  printk (KERN_NOTICE "alloc_disk failure\n");
                  goto out_vfree;
          }
-         dev->gd->major = sbull_major;
-         dev->gd->first_minor = which*SBULL_MINORS;
-         dev->gd->fops = &sbull_ops;
+         dev->gd->major = osurd_major;
+         dev->gd->first_minor = which*OSURD_MINORS;
+         dev->gd->fops = &osurd_ops;
          dev->gd->queue = dev->queue;
          dev->gd->private_data = dev;
-         snprintf (dev->gd->disk_name, 32, "sbull%c", which + 'a');
+         snprintf (dev->gd->disk_name, 32, "osurd%c", which + 'a');
          set_capacity(dev->gd, nsectors*(hardsect_size/KERNEL_SECTOR_SIZE));
          add_disk(dev->gd);
          return;
@@ -421,21 +430,21 @@
 
 
 
- static int __init sbull_init(void)
+ static int __init osurd_init(void)
  {
          int i;
          /*
           * Get registered.
           */
-         sbull_major = register_blkdev(sbull_major, "sbull");
-         if (sbull_major <= 0) {
-                 printk(KERN_WARNING "sbull: unable to get major number\n");
+         osurd_major = register_blkdev(osurd_major, "osurd");
+         if (osurd_major <= 0) {
+                 printk(KERN_WARNING "osurd: unable to get major number\n");
                  return -EBUSY;
          }
          /*
           * Allocate the device array, and initialize each one.
           */
-         Devices = kmalloc(ndevices*sizeof (struct sbull_dev), GFP_KERNEL);
+         Devices = kmalloc(ndevices*sizeof (struct osurd_dev), GFP_KERNEL);
          if (Devices == NULL)
                  goto out_unregister;
          for (i = 0; i < ndevices; i++)
@@ -444,16 +453,16 @@
          return 0;
 
    out_unregister:
-         unregister_blkdev(sbull_major, "sbd");
+         unregister_blkdev(osurd_major, "osurd");
          return -ENOMEM;
  }
 
- static void sbull_exit(void)
+ static void osurd_exit(void)
  {
          int i;
 
          for (i = 0; i < ndevices; i++) {
-                 struct sbull_dev *dev = Devices + i;
+                 struct osurd_dev *dev = Devices + i;
 
                  del_timer_sync(&dev->timer);
                  if (dev->gd) {
@@ -470,9 +479,9 @@
                  if (dev->data)
                          vfree(dev->data);
          }
-         unregister_blkdev(sbull_major, "sbull");
+         unregister_blkdev(osurd_major, "osurd");
          kfree(Devices);
  }
 
- module_init(sbull_init);
- module_exit(sbull_exit);
+ module_init(osurd_init);
+ module_exit(osurd_exit);
