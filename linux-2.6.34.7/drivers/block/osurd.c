@@ -141,7 +141,7 @@
 
  static int osurd_open(struct block_device *bdev, fmode_t mode)
  {
-         struct osurd_dev dev = bdev->bd_disk->private_data;
+         struct osurd_dev *dev = bdev->bd_disk->private_data;
          del_timer_sync(&dev->timer);
          spin_lock(&dev->lock);
          if (! dev->users)
@@ -217,7 +217,7 @@
  {
          long size;
          struct hd_geometry geo;
-         struct osurd_dev dev = bdev->bd_disk->private_data;
+         struct osurd_dev *dev = bdev->bd_disk->private_data;
 
          switch(cmd) {
              case HDIO_GETGEO:
@@ -242,7 +242,7 @@
 
 int osurd_getgeo(struct block_device * bdev, struct hd_geometry * geo) {
 	long size;
-	struct osurd_dev dev = bdev->bd_disk->private_data;
+	struct osurd_dev *dev = bdev->bd_disk->private_data;
 
 	/* We have no real geometry, of course, so make something up. */
 	size = dev->size*(hardsect_size/KERNEL_SECTOR_SIZE);
@@ -263,7 +263,7 @@ int osurd_getgeo(struct block_device * bdev, struct hd_geometry * geo) {
          .release         = osurd_release,
          .media_changed   = osurd_media_changed,
          .revalidate_disk = osurd_revalidate,
-         .ioctl           = osurd_ioctl
+         .ioctl           = osurd_ioctl,
          .getgeo          = osurd_getgeo
  };
 
